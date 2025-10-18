@@ -165,6 +165,7 @@ export const getDefaultNarrationSettings = (): NarrationSettings => {
     voiceName: defaultVoice?.name || 'Default',
     speed: 1.0,
     autoPlay: false,
+    provider: 'webspeech',
   };
 };
 

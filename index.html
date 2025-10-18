@@ -5,7 +5,22 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Biblical Journeys</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500;1,600;1,700&family=Crimson+Text:ital,wght@0,400;0,600;0,700;1,400;1,600;1,700&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            'script': ['Cormorant Garamond', 'serif'],
+            'serif': ['Crimson Text', 'serif'],
+          }
+        }
+      }
+    }
+  </script>
 <script type="importmap">
 {
   "imports": {
@@ -27,6 +42,168 @@
   }
   .animate-pulse-gentle {
     animation: pulse-gentle 2s infinite;
+  }
+  
+  /* Drop cap styling for illuminated manuscript effect */
+  .drop-cap {
+    float: left;
+    font-size: 4rem;
+    line-height: 3rem;
+    padding-right: 0.5rem;
+    padding-top: 0.25rem;
+    font-family: 'Cormorant Garamond', serif;
+    font-weight: 600;
+    color: #8B4513;
+  }
+  
+  /* Parchment texture background */
+  .parchment-bg {
+    background: linear-gradient(135deg, #F5E6D3 0%, #EAD8C0 100%);
+    position: relative;
+  }
+  
+  .parchment-bg::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-image: 
+      radial-gradient(circle at 1px 1px, rgba(139, 69, 19, 0.1) 1px, transparent 0);
+    background-size: 20px 20px;
+    pointer-events: none;
+  }
+
+  /* Leather texture background */
+  .leather-bg {
+    background: 
+      linear-gradient(45deg, #8B4513 0%, #A0522D 25%, #8B4513 50%, #A0522D 75%, #8B4513 100%),
+      radial-gradient(circle at 20% 80%, rgba(160, 82, 45, 0.3) 0%, transparent 50%),
+      radial-gradient(circle at 80% 20%, rgba(139, 69, 19, 0.3) 0%, transparent 50%),
+      radial-gradient(circle at 40% 40%, rgba(160, 82, 45, 0.2) 0%, transparent 50%);
+    background-size: 100px 100px, 200px 200px, 150px 150px, 100px 100px;
+    position: relative;
+  }
+
+  .leather-bg::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-image: 
+      repeating-linear-gradient(45deg, transparent 0px, transparent 2px, rgba(0, 0, 0, 0.1) 2px, rgba(0, 0, 0, 0.1) 4px),
+      repeating-linear-gradient(-45deg, transparent 0px, transparent 2px, rgba(0, 0, 0, 0.05) 2px, rgba(0, 0, 0, 0.05) 4px);
+    pointer-events: none;
+  }
+
+  /* Page flip animation */
+  @keyframes pageFlip {
+    0% {
+      transform: rotateY(0deg);
+      opacity: 1;
+    }
+    50% {
+      transform: rotateY(-90deg);
+      opacity: 0.5;
+    }
+    100% {
+      transform: rotateY(0deg);
+      opacity: 1;
+    }
+  }
+
+  .page-flip {
+    animation: pageFlip 1.5s ease-in-out;
+  }
+
+  /* Ornate border decorations */
+  .ornate-border {
+    position: relative;
+    border: 3px solid #D4AF37;
+  }
+
+  .ornate-border::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    left: -8px;
+    right: -8px;
+    bottom: -8px;
+    border: 2px solid #F4E4BC;
+    border-radius: inherit;
+    background: linear-gradient(45deg, transparent 30%, rgba(212, 175, 55, 0.1) 50%, transparent 70%);
+  }
+
+  /* Embossed text effect */
+  .embossed-text {
+    text-shadow: 
+      1px 1px 0px #D4AF37,
+      2px 2px 0px #B8860B,
+      3px 3px 0px #CD853F,
+      4px 4px 2px rgba(0, 0, 0, 0.3);
+  }
+
+  /* Decorative corners */
+  .decorative-corners {
+    position: relative;
+  }
+
+  .decorative-corners::before,
+  .decorative-corners::after {
+    content: '';
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    border: 3px solid #D4AF37;
+  }
+
+  .decorative-corners::before {
+    top: 10px;
+    left: 10px;
+    border-right: none;
+    border-bottom: none;
+  }
+
+  .decorative-corners::after {
+    bottom: 10px;
+    right: 10px;
+    border-left: none;
+    border-top: none;
+  }
+
+  /* Lesson card entrance animation */
+  @keyframes lessonEntrance {
+    0% {
+      opacity: 0;
+      transform: translateY(20px) scale(0.95);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  .lesson-entrance {
+    animation: lessonEntrance 0.6s ease-out;
+  }
+
+  /* Fade in animation for expanded lessons */
+  @keyframes fadeIn {
+    0% {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-fadeIn {
+    animation: fadeIn 0.3s ease-out;
   }
 </style>
 </head>

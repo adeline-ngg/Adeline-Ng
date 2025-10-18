@@ -3,8 +3,11 @@ import { GameStage, UserProfile, Story } from './types';
 import ProfileSetup from './components/ProfileSetup';
 import StorySelect from './components/StorySelect';
 import StoryPlayer from './components/StoryPlayer';
-import { loadProfile, hasProfile } from './services/storageService';
+import LessonsSummary from './components/LessonsSummary';
+import TutorialGuide from './components/TutorialGuide';
+import { loadProfile, hasProfile, migrateLessonFormat } from './services/storageService';
 import { initializeMemory } from './services/memoryService';
+import { tutorialService } from './services/tutorialService';
 
 const App: React.FC = () => {
   const [gameStage, setGameStage] = useState<GameStage>(GameStage.PROFILE_SETUP);
@@ -12,11 +15,16 @@ const App: React.FC = () => {
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const [shouldContinueStory, setShouldContinueStory] = useState(false);
   const [isReplayMode, setIsReplayMode] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
+  const [isFirstTimeUser, setIsFirstTimeUser] = useState(false);
 
   // Check for saved profile on mount
   useEffect(() => {
     // Initialize Mem0 (optional, will gracefully degrade if not configured)
     initializeMemory().catch(console.error);
+
+    // Run data migration for lesson format
+    migrateLessonFormat();
 
     // Load existing profile if available
     if (hasProfile()) {
@@ -30,7 +38,13 @@ const App: React.FC = () => {
 
   const handleProfileCreate = (profile: UserProfile) => {
     setUserProfile(profile);
+    setIsFirstTimeUser(true);
     setGameStage(GameStage.STORY_SELECT);
+    
+    // Show tutorial for first-time users
+    if (tutorialService.shouldShowTutorial()) {
+      setShowTutorial(true);
+    }
   };
 
   const handleStorySelect = (story: Story, shouldContinue: boolean = false, isReplayMode: boolean = false) => {
@@ -58,6 +72,23 @@ const App: React.FC = () => {
     setGameStage(GameStage.STORY_SELECT);
   };
 
+  const handleViewLessonsSummary = () => {
+    setGameStage(GameStage.LESSONS_SUMMARY);
+  };
+
+  const handleOpenTutorial = () => {
+    setShowTutorial(true);
+  };
+
+  const handleTutorialComplete = () => {
+    setShowTutorial(false);
+    setIsFirstTimeUser(false);
+  };
+
+  const handleBackFromLessons = () => {
+    setGameStage(GameStage.STORY_SELECT);
+  };
+
   const renderContent = () => {
     switch (gameStage) {
       case GameStage.PROFILE_SETUP:
@@ -73,6 +104,8 @@ const App: React.FC = () => {
             onStorySelect={handleStorySelect}
             onProfileDeleted={handleProfileDeleted}
             onProfileUpdated={handleProfileUpdated}
+            onTutorialClick={handleOpenTutorial}
+            onLessonsSummaryClick={handleViewLessonsSummary}
           />
         );
       case GameStage.STORY_PLAYER:
@@ -89,12 +122,31 @@ const App: React.FC = () => {
             onExit={handleExitStory} 
           />
         );
+      case GameStage.LESSONS_SUMMARY:
+        return (
+          <LessonsSummary 
+            onBack={handleBackFromLessons}
+          />
+        );
       default:
         return <div>Loading...</div>;
     }
   };
 
-  return <div className="App">{renderContent()}</div>;
+  return (
+    <div className="App">
+      {renderContent()}
+      
+      {/* Tutorial Guide Modal */}
+      {showTutorial && (
+        <TutorialGuide
+          isOpen={showTutorial}
+          onClose={() => setShowTutorial(false)}
+          onComplete={handleTutorialComplete}
+        />
+      )}
+    </div>
+  );
 };
 
 export default App;

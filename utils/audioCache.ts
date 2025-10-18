@@ -30,11 +30,11 @@ async function getDB(): Promise<IDBPDatabase<AudioCacheDB>> {
 }
 
 /**
- * Generate cache key from text, voice, and speed
+ * Generate cache key from text, voice, speed, and provider
  */
-function generateCacheKey(text: string, voiceURI: string, speed: number): string {
+function generateCacheKey(text: string, voiceURI: string, speed: number, provider: 'webspeech' | 'elevenlabs'): string {
   const normalized = text.trim().toLowerCase();
-  return `${voiceURI}:${speed}:${normalized}`;
+  return `${provider}:${voiceURI}:${speed}:${normalized}`;
 }
 
 /**
@@ -44,11 +44,12 @@ export async function cacheAudioBlob(
   text: string,
   audioBlob: Blob,
   voiceURI: string,
-  speed: number
+  speed: number,
+  provider: 'webspeech' | 'elevenlabs'
 ): Promise<void> {
   try {
     const db = await getDB();
-    const key = generateCacheKey(text, voiceURI, speed);
+    const key = generateCacheKey(text, voiceURI, speed, provider);
     
     const entry: AudioCacheEntry = {
       text,
@@ -56,6 +57,7 @@ export async function cacheAudioBlob(
       voiceURI,
       speed,
       timestamp: Date.now(),
+      provider,
     };
 
     await db.put(STORE_NAME, entry, key);
@@ -73,11 +75,12 @@ export async function cacheAudioBlob(
 export async function getCachedAudioBlob(
   text: string,
   voiceURI: string,
-  speed: number
+  speed: number,
+  provider: 'webspeech' | 'elevenlabs'
 ): Promise<Blob | null> {
   try {
     const db = await getDB();
-    const key = generateCacheKey(text, voiceURI, speed);
+    const key = generateCacheKey(text, voiceURI, speed, provider);
     const entry = await db.get(STORE_NAME, key);
 
     if (!entry) {
@@ -109,7 +112,7 @@ async function cleanupCache(db: IDBPDatabase<AudioCacheDB>): Promise<void> {
     const now = Date.now();
     for (const entry of allEntries) {
       if (now - entry.timestamp > MAX_CACHE_AGE_MS) {
-        const key = generateCacheKey(entry.text, entry.voiceURI, entry.speed);
+        const key = generateCacheKey(entry.text, entry.voiceURI, entry.speed, entry.provider);
         await db.delete(STORE_NAME, key);
       }
     }
@@ -120,7 +123,7 @@ async function cleanupCache(db: IDBPDatabase<AudioCacheDB>): Promise<void> {
       const entriesToRemove = remainingEntries.length - MAX_CACHE_ENTRIES;
       for (let i = 0; i < entriesToRemove; i++) {
         const entry = remainingEntries[i];
-        const key = generateCacheKey(entry.text, entry.voiceURI, entry.speed);
+        const key = generateCacheKey(entry.text, entry.voiceURI, entry.speed, entry.provider);
         await db.delete(STORE_NAME, key);
       }
     }

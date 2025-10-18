@@ -1,52 +1,8 @@
-# Quick Start Guide - Biblical Journeys Enhanced
+# User Guide - Biblical Journeys
 
-## Installation
+## Getting Started
 
-```bash
-# 1. Install dependencies
-npm install
-
-# 2. Set up environment variables
-# Create .env.local file (if not exists)
-echo "API_KEY=your_gemini_api_key_here" > .env.local
-
-# Optional: Add Mem0 API key for memory features
-echo "MEM0_API_KEY=your_mem0_api_key_here" >> .env.local
-
-# 3. Run the app
-npm run dev
-```
-
-## What's New? 🎉
-
-### 1. **Animated Scenes**
-- Every story scene now has subtle animations
-- Smooth transitions between frames
-- More immersive experience
-
-### 2. **Voice Narration** (Optional)
-- Click the **play button** on any story segment
-- Choose your narrator voice in **Settings** (gear icon)
-- Adjust playback speed (0.75x - 1.5x)
-- **100% FREE** - uses your browser's built-in voices
-
-### 3. **Auto-Save Progress**
-- Your progress saves automatically as you play
-- Return anytime and **Continue** from where you left off
-- Or **Restart** any story with a fresh beginning
-
-### 4. **Profile Persistence**
-- Create your avatar once
-- Automatically loads when you return
-- Edit or delete anytime in **Settings**
-
-### 5. **Smart Memory** (Experimental)
-- App learns your preferences over time
-- Remembers your choice patterns
-- Can subtly influence story generation
-- (Requires Mem0 API key - optional)
-
-## First Time Using the App
+### First Time Using the App
 
 1. **Create Your Character**
    - Enter your character's name
@@ -69,7 +25,7 @@ npm run dev
    - Exit anytime
    - Return later to continue
 
-## Returning User Flow
+### Returning User Flow
 
 1. **App Opens** → Your profile auto-loads
 2. **Story Selection** → See "In Progress" badges
@@ -77,32 +33,71 @@ npm run dev
    - **Continue Story** → Resume from last point
    - **Restart from Beginning** → Fresh start
 
-## Settings Panel (⚙️ Icon)
+## Features Overview
 
-### Narration Settings
-- **Enable/Disable**: Toggle narration on/off
-- **Voice Selection**: Choose from available system voices
-- **Speed Control**: Adjust how fast the narrator speaks
-- **Test Voice**: Preview your selected voice
+### 1. Animated Scenes ✨
+- Every story scene features animated GIF transitions
+- Smooth transitions between frames
+- More immersive storytelling experience
+- Generated using 2-frame animation for cost efficiency
+
+### 2. Voice Narration 🎙️ (Optional)
+- Click the **play button** on any story segment
+- Choose your narrator voice in **Settings** (gear icon)
+- Adjust playback speed (0.75x - 1.5x)
+- **100% FREE** - uses your browser's built-in voices
+- Audio is cached to prevent regeneration
+
+### 3. Auto-Save Progress 📖
+- Your progress saves automatically as you play
+- Return anytime and **Continue** from where you left off
+- Or **Restart** any story with a fresh beginning
+- Multiple stories can have independent progress
+- Visual "In Progress" badge on story cards
+
+### 4. Profile Persistence 💾
+- Create your avatar once
+- Automatically loads when you return
+- Edit or delete anytime in **Settings**
+- Avatar image saved as base64
+
+### 5. Smart Memory 🧠 (Experimental)
+- App learns your preferences over time
+- Remembers your choice patterns
+- Can subtly influence story generation
+- (Requires Mem0 API key - optional)
+- Free tier: 100k tokens/month
+
+## Using Voice Narration
+
+### Setup
+1. Enable narration in Settings first
+2. Pick a voice you like (test it!)
+3. Adjust speed to your preference
+4. Click play button on any narrator segment
+
+### Browser Compatibility
+- **Chrome/Edge**: Best voice quality
+- **Safari**: Good quality (Apple voices)
+- **Firefox**: Limited support
+
+## Managing Your Progress
+
+### Auto-Save Features
+- Saves after each story segment
+- Resume from last position
+- Multiple stories can have independent progress
+- "Continue" or "Restart" options on story selection
 
 ### Storage Information
-- View saved data
-- See which stories have progress
-- Check storage usage
+- Profile + progress uses ~100-500 KB
+- Audio cache can grow to a few MB
+- Clear cache in Settings if needed
 
 ### Data Management
 - **Clear Audio Cache**: Free up space
 - **Clear Story Progress**: Remove all saved progress
 - **Delete Profile**: Remove everything and start fresh
-
-## Browser Recommendations
-
-### Best Experience
-- **Chrome** or **Edge**: Best voice quality
-- **Safari**: Good quality (Apple voices)
-
-### Limited Support
-- **Firefox**: Narration may not work properly
 
 ## Tips & Tricks
 
@@ -121,6 +116,26 @@ npm run dev
 - Each story saves progress independently
 - You can have multiple stories in progress
 - Switch between stories anytime
+
+## FAQ
+
+**Q: Do I need to create a new profile every time?**
+A: No! Your profile saves automatically and loads when you return.
+
+**Q: Can I change my avatar later?**
+A: Yes! Go to Settings → Delete Profile, then create a new one.
+
+**Q: Do I need the Mem0 API key?**
+A: No, it's optional. The app works great without it!
+
+**Q: Why are the animations taking long to load?**
+A: Generating 2 frames + creating GIF takes time. First frame shows quickly, animation follows.
+
+**Q: Can I use this offline?**
+A: Not for generating new content, but you can replay saved audio and view saved progress offline.
+
+**Q: How do I backup my progress?**
+A: Currently manual backup needed. Future version will have export/import.
 
 ## Troubleshooting
 
@@ -160,26 +175,6 @@ npm run dev
 ### Optional Paid Feature
 - 🔹 Mem0 memory (has free tier: 100k tokens/month)
 
-## FAQ
-
-**Q: Do I need to create a new profile every time?**
-A: No! Your profile saves automatically and loads when you return.
-
-**Q: Can I change my avatar later?**
-A: Yes! Go to Settings → Delete Profile, then create a new one.
-
-**Q: Do I need the Mem0 API key?**
-A: No, it's optional. The app works great without it!
-
-**Q: Why are the animations taking long to load?**
-A: Generating 2 frames + creating GIF takes time. First frame shows quickly, animation follows.
-
-**Q: Can I use this offline?**
-A: Not for generating new content, but you can replay saved audio and view saved progress offline.
-
-**Q: How do I backup my progress?**
-A: Currently manual backup needed. Future version will have export/import.
-
 ## Need Help?
 
 1. Check the browser console for errors (F12)
@@ -190,9 +185,3 @@ A: Currently manual backup needed. Future version will have export/import.
 ## Enjoy Your Biblical Journey! 📖✨
 
 Experience interactive biblical stories with beautiful animations and immersive narration. Your progress is always saved, and you can return anytime to continue your adventure!
-
----
-
-**Version**: 2.0.0
-**Last Updated**: October 2025
-

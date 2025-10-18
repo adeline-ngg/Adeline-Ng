@@ -18,10 +18,10 @@ export async function initializeMemory(apiKey?: string): Promise<boolean> {
 
   try {
     // Check if API key is available
-    const key = apiKey || process.env.MEM0_API_KEY;
+    const key = apiKey || import.meta.env.VITE_MEMO_API_KEY || import.meta.env.VITE_MEM0_API_KEY;
     
     if (!key) {
-      console.warn('Mem0 API key not found. Memory features will be disabled.');
+      console.info('Mem0 API key not found. Memory features will be disabled (this is optional).');
       return false;
     }
 
@@ -32,7 +32,22 @@ export async function initializeMemory(apiKey?: string): Promise<boolean> {
     console.log('Mem0 memory service initialized');
     return true;
   } catch (error) {
-    console.error('Error initializing Mem0:', error);
+    // Check for CORS or network-related errors
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    
+    if (errorMessage.includes('CORS') || 
+        errorMessage.includes('Failed to fetch') || 
+        errorMessage.includes('net::ERR_FAILED') ||
+        errorMessage.includes('blocked by CORS policy')) {
+      console.info('Mem0 API is not accessible from browser (CORS restrictions). Memory features will be disabled (this is optional).');
+    } else if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
+      console.warn('Invalid Mem0 API key. Memory features will be disabled.');
+    } else if (errorMessage.includes('403') || errorMessage.includes('Forbidden')) {
+      console.warn('Mem0 API access denied. Memory features will be disabled.');
+    } else {
+      console.warn('Mem0 initialization failed. Memory features will be disabled (this is optional):', errorMessage);
+    }
+    
     memoryClient = null;
     isInitialized = false;
     return false;

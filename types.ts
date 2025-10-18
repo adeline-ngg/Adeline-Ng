@@ -2,11 +2,18 @@ export enum GameStage {
   PROFILE_SETUP = 'PROFILE_SETUP',
   STORY_SELECT = 'STORY_SELECT',
   STORY_PLAYER = 'STORY_PLAYER',
+  LESSONS_SUMMARY = 'LESSONS_SUMMARY',
 }
 
 export interface UserProfile {
   name: string;
   avatarUrl: string;
+  description: string;
+}
+
+export interface EnvironmentZone {
+  id: string;
+  name: string;
   description: string;
 }
 
@@ -17,6 +24,7 @@ export interface Story {
   initialPrompt: string;
   coverImage: string;
   bibleReference?: BibleReference;
+  environmentZones?: EnvironmentZone[];
 }
 
 export interface StorySegment {
@@ -31,8 +39,10 @@ export interface GeminiStoryResponse {
     narrative: string;
     imagePrompt: string;
     choices: string[];
-    lesson: string | null;
+    lessons: string[];
     isComplete?: boolean;
+    isFallback?: boolean;  // Add this field
+    location?: string | null;  // Add location field
 }
 
 // Narration and Audio Types
@@ -42,6 +52,27 @@ export interface NarrationSettings {
   voiceName: string;
   speed: number; // 1.0, 1.25, 1.5
   autoPlay: boolean;
+  provider: 'webspeech' | 'elevenlabs' | 'speechify';
+}
+
+export interface ElevenLabsSettings {
+  enabled: boolean;
+  selectedVoiceId: string;
+  autoPlay: boolean;
+  apiKey?: string; // Optional override
+}
+
+export interface SpeechifySettings {
+  enabled: boolean;
+  selectedVoiceId: string;
+  apiKey?: string;
+}
+
+export interface SpeechifyVoice {
+  id: string;
+  name: string;
+  description: string;
+  language: string;
 }
 
 export interface AudioCacheEntry {
@@ -50,6 +81,7 @@ export interface AudioCacheEntry {
   voiceURI: string;
   speed: number;
   timestamp: number;
+  provider: 'webspeech' | 'elevenlabs' | 'speechify';
 }
 
 // Storage and Save State Types
@@ -67,6 +99,7 @@ export interface StoryProgress {
   userChoiceCount: number; // Track user choices only
   isCompleted: boolean;
   completionDate?: number;
+  currentEnvironment?: string; // Current environment zone ID or description
 }
 
 export interface SavedProgress {
@@ -75,6 +108,8 @@ export interface SavedProgress {
 
 export interface AppSettings {
   narration: NarrationSettings;
+  elevenLabs: ElevenLabsSettings;
+  speechify: SpeechifySettings;
 }
 
 // Mem0 Memory Types
@@ -118,4 +153,28 @@ export interface BibleTextModalProps {
   onClose: () => void;
   storyTitle: string;
   bibleReference: BibleReference;
+}
+
+// Tutorial and Lessons Summary Types
+export interface TutorialStep {
+  id: string;
+  title: string;
+  description: string;
+  selector?: string; // CSS selector for element to highlight
+  position?: 'top' | 'bottom' | 'left' | 'right' | 'center';
+}
+
+export interface StoryLesson {
+  storyId: string;
+  storyTitle: string;
+  lesson: string;
+  completionDate: number;
+  segmentIndex: number; // Index of lesson in story segments
+  lessonIndex?: number; // Index of lesson within the segment (0, 1, or 2)
+}
+
+export interface TutorialCompletion {
+  hasCompletedTutorial: boolean;
+  lastCompletedDate?: number;
+  skippedTutorial: boolean;
 }

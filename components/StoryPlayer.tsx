@@ -1,9 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Story, UserProfile, StorySegment, GeminiStoryResponse, NarrationSettings } from '../types';
-import { generateStorySegment, generateSceneImageWithCharacters, generateClarification } from '../services/geminiService';
+import { Story, UserProfile, StorySegment, GeminiStoryResponse, NarrationSettings, ElevenLabsSettings, SpeechifySettings } from '../types';
+import { generateStorySegment, generateSceneImageWithCharacters, generateClarification, generateLessonTitle } from '../services/geminiService';
 import { speechService } from '../services/speechService';
-import { loadSettings, saveStoryProgress, loadStoryProgress } from '../services/storageService';
+import { elevenLabsService, QuotaExceededError } from '../services/elevenLabsService';
+import { speechifyService } from '../services/speechifyService';
+import { loadSettings, saveStoryProgress, loadStoryProgress, loadElevenLabsSettings, loadSpeechifySettings } from '../services/storageService';
 import { trackChoice, isMemoryAvailable } from '../services/memoryService';
+import { formatNarrative, addDropCap, NARRATIVE_TYPOGRAPHY, HEADER_TYPOGRAPHY } from '../utils/textFormatting';
+import { getCachedAudioBlob, cacheAudioBlob } from '../utils/audioCache';
+import { ELEVENLABS_VOICES } from '../constants';
 import LoadingSpinner from './LoadingSpinner';
 import BibleTextModal from './BibleTextModal';
 
@@ -22,17 +27,114 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
   const [question, setQuestion] = useState('');
   const [isAnswering, setIsAnswering] = useState(false);
   const [narrationSettings, setNarrationSettings] = useState<NarrationSettings>(loadSettings().narration);
+  const [elevenLabsSettings, setElevenLabsSettings] = useState<ElevenLabsSettings>(loadElevenLabsSettings());
+  const [speechifySettings, setSpeechifySettings] = useState<SpeechifySettings>(loadSpeechifySettings());
+  
+  // Debug: Log narration settings on component mount and when they change
+  useEffect(() => {
+    console.log('StoryPlayer: Narration settings loaded:', narrationSettings);
+    console.log('StoryPlayer: Narration enabled:', narrationSettings.enabled);
+    console.log('StoryPlayer: Narration provider:', narrationSettings.provider);
+  }, [narrationSettings]);
+
+  // Refresh settings when component becomes visible (user returns from Settings)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        console.log('StoryPlayer: Refreshing settings after returning from Settings');
+        const updatedSettings = loadSettings();
+        setNarrationSettings(updatedSettings.narration);
+        setElevenLabsSettings(loadElevenLabsSettings());
+        setSpeechifySettings(loadSpeechifySettings());
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
   const [currentlyPlayingIndex, setCurrentlyPlayingIndex] = useState<number | null>(null);
+  const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [currentAudioElement, setCurrentAudioElement] = useState<HTMLAudioElement | null>(null);
   const [characterDescriptions, setCharacterDescriptions] = useState<string>('');
+  const [currentEnvironment, setCurrentEnvironment] = useState<string>('');
   const [userChoiceCount, setUserChoiceCount] = useState(0);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [showBibleModal, setShowBibleModal] = useState(false);
+  const [expandedLessons, setExpandedLessons] = useState<Set<string>>(new Set());
+  const [lessonTitles, setLessonTitles] = useState<Map<string, string>>(new Map());
+  const [lessonTitlesLoading, setLessonTitlesLoading] = useState<Set<string>>(new Set());
   const storyHistory = useRef<string[]>([]);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
   const isGeneratingRef = useRef(false); // Prevent concurrent API calls
 
   const scrollToBottom = () => {
     endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const toggleLessonExpansion = (lessonId: string) => {
+    setExpandedLessons(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(lessonId)) {
+        newSet.delete(lessonId);
+      } else {
+        newSet.add(lessonId);
+      }
+      return newSet;
+    });
+  };
+
+  const generateLessonTitleIfNeeded = async (lessonId: string, lessonText: string) => {
+    // Check if title already exists or is being generated
+    if (lessonTitles.has(lessonId) || lessonTitlesLoading.has(lessonId)) {
+      return;
+    }
+
+    // Mark as loading
+    setLessonTitlesLoading(prev => new Set(prev).add(lessonId));
+
+    try {
+      const title = await generateLessonTitle(lessonText);
+      setLessonTitles(prev => new Map(prev).set(lessonId, title));
+    } catch (error) {
+      console.error('Error generating lesson title:', error);
+      // Fallback to first sentence
+      const fallbackTitle = lessonText.split('.')[0].substring(0, 50) + (lessonText.split('.')[0].length > 50 ? '...' : '');
+      setLessonTitles(prev => new Map(prev).set(lessonId, fallbackTitle));
+    } finally {
+      // Remove from loading set
+      setLessonTitlesLoading(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(lessonId);
+        return newSet;
+      });
+    }
+  };
+
+  const scrollToNewSegment = (segmentIndex: number) => {
+    // Scroll to the new segment with proper timing and header offset
+    setTimeout(() => {
+      const segmentElement = document.querySelector(`[data-segment-index="${segmentIndex}"]`);
+      if (segmentElement) {
+        // Calculate the header height to account for sticky header
+        const header = document.querySelector('header');
+        const headerHeight = header ? header.offsetHeight : 0;
+        
+        // Get the element's position relative to the document
+        const elementRect = segmentElement.getBoundingClientRect();
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const elementTop = elementRect.top + scrollTop;
+        
+        // Calculate the target scroll position (element top minus header height plus small padding)
+        const targetScrollTop = elementTop - headerHeight - 20; // 20px padding
+        
+        // Smooth scroll to the calculated position
+        window.scrollTo({
+          top: targetScrollTop,
+          behavior: 'smooth'
+        });
+      }
+    }, 300); // Increased delay to ensure DOM is fully rendered
   };
 
   // Calculate progress percentage based on user choice count
@@ -59,6 +161,29 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
       : userCharacter;
   }, []);
 
+  // Match AI location to predefined environment zones or store dynamic description
+  const updateEnvironmentFromLocation = useCallback((location: string | null): void => {
+    if (!location) return;
+    
+    // Check if location matches any predefined environment zones
+    if (story.environmentZones) {
+      const matchingZone = story.environmentZones.find(zone => 
+        zone.id.toLowerCase().includes(location.toLowerCase()) ||
+        zone.name.toLowerCase().includes(location.toLowerCase()) ||
+        location.toLowerCase().includes(zone.id.toLowerCase()) ||
+        location.toLowerCase().includes(zone.name.toLowerCase())
+      );
+      
+      if (matchingZone) {
+        setCurrentEnvironment(matchingZone.description);
+        return;
+      }
+    }
+    
+    // If no predefined zone matches, store the location as dynamic environment
+    setCurrentEnvironment(location);
+  }, [story.environmentZones]);
+
   // Detect when AI is stuck in repetitive loops
   const detectRepetitiveContent = (narrative: string): boolean => {
     const repetitivePhrases = [
@@ -81,8 +206,16 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [segments]);
+    // Only auto-scroll to new narrator segment during active story play, not in replay mode
+    if (!isReplayMode && segments.length > 0) {
+      const lastSegment = segments[segments.length - 1];
+      // Only scroll to narrator segments (which have images and story text), not lesson/user/answer segments
+      if (lastSegment.type === 'narrator') {
+        const newSegmentIndex = segments.length - 1;
+        scrollToNewSegment(newSegmentIndex);
+      }
+    }
+  }, [segments, isReplayMode]);
 
   // Load progress or start new story
   useEffect(() => {
@@ -92,8 +225,22 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
     if (isReplayMode) {
       const progress = loadStoryProgress(story.id);
       if (progress && progress.isCompleted) {
-        setSegments(progress.segments);
+        // Clean segments for replay mode - ensure no loading states and all images are present
+        const cleanedSegments = progress.segments.map(segment => {
+          if (segment.type === 'narrator') {
+            return {
+              ...segment,
+              isLoadingImage: false,
+              // Ensure there's always an image, use fallback if none exists
+              imageUrl: segment.imageUrl || 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1280&h=720&fit=crop'
+            };
+          }
+          return segment;
+        });
+        
+        setSegments(cleanedSegments);
         setUserChoiceCount(progress.userChoiceCount || 0);
+        setCurrentEnvironment(progress.currentEnvironment || '');
         storyHistory.current = progress.storyHistory;
         setIsLoading(false);
         return;
@@ -106,6 +253,7 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
         setSegments(progress.segments);
         setChoices(progress.currentChoices);
         setUserChoiceCount(progress.userChoiceCount || 0);
+        setCurrentEnvironment(progress.currentEnvironment || '');
         storyHistory.current = progress.storyHistory;
         setIsLoading(false);
         return;
@@ -139,9 +287,10 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
         storyHistory: storyHistory.current,
         userChoiceCount,
         isCompleted: false,
+        currentEnvironment,
       });
     }
-  }, [segments, choices, userChoiceCount, story.id, isLoading, isReplayMode]);
+  }, [segments, choices, userChoiceCount, story.id, isLoading, isReplayMode, currentEnvironment]);
 
   const fetchNextSegment = useCallback(async (prompt: string) => {
     // Prevent concurrent calls
@@ -160,7 +309,31 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
     try {
       const response: GeminiStoryResponse = await generateStorySegment(prompt);
       
+      // If this is a fallback response, don't add it to history and handle as error
+      if (response.isFallback) {
+        // Remove the prompt we just added
+        storyHistory.current.pop();
+        
+        // Show error segment
+        const errorSegment: StorySegment = {
+          type: 'narrator',
+          text: response.narrative,
+          isLoadingImage: false,
+        };
+        setSegments(prev => [...prev, errorSegment]);
+        setChoices(response.choices);
+        setIsLoading(false);
+        isGeneratingRef.current = false;
+        return;
+      }
+      
+      // Only add successful responses to history
       storyHistory.current.push(`RESPONSE: ${JSON.stringify(response)}`);
+
+      // Update environment based on AI location response
+      if (response.location) {
+        updateEnvironmentFromLocation(response.location);
+      }
 
       const newNarratorSegment: StorySegment = {
         type: 'narrator',
@@ -179,31 +352,41 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
           userChoiceCount,
           isCompleted: true,
           completionDate: Date.now(),
+          currentEnvironment,
         });
         return;
       }
 
-      // Add segments (narrator + optional lesson) immediately
+      // Add segments (narrator + optional lessons) immediately
       setSegments(prev => {
           const newSegments = [...prev, newNarratorSegment];
-          if (response.lesson) {
+          if (response.lessons && response.lessons.length > 0) {
+              // Store all lessons as a single segment with JSON string
               newSegments.push({
                   type: 'lesson',
-                  text: response.lesson,
+                  text: JSON.stringify(response.lessons),
               });
           }
           return newSegments;
       });
+
+      // Auto-play narration if enabled
+      if (narrationSettings.enabled && narrationSettings.autoPlay) {
+        const segmentIndex = segments.length; // Index of the new narrator segment
+        setTimeout(() => {
+          handlePlayNarration(response.narrative, segmentIndex);
+        }, 100); // Small delay to ensure segment is rendered
+      }
       
       // Show choices immediately so user doesn't wait for image
       setChoices(response.choices);
       setIsLoading(false);
 
-      // Generate static image in background with character consistency
+      // Generate static image in background with character and environment consistency
       (async () => {
           try {
               console.log('Starting background image generation...');
-              const imageUrl = await generateSceneImageWithCharacters(response.imagePrompt, characterDescriptions);
+              const imageUrl = await generateSceneImageWithCharacters(response.imagePrompt, characterDescriptions, currentEnvironment);
               console.log('Image generated successfully');
               
               setSegments(prev => {
@@ -211,6 +394,10 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
                   for (let i = newSegments.length - 1; i >= 0; i--) {
                       if (newSegments[i].type === 'narrator' && newSegments[i].isLoadingImage) {
                           newSegments[i] = { ...newSegments[i], imageUrl, isLoadingImage: false };
+                          // Trigger scroll to show the loaded image
+                          setTimeout(() => {
+                            scrollToNewSegment(i);
+                          }, 100);
                           break;
                       }
                   }
@@ -227,6 +414,10 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
                       if (newSegments[i].type === 'narrator' && newSegments[i].isLoadingImage) {
                           console.log('Setting fallback image for segment', i);
                           newSegments[i] = { ...newSegments[i], imageUrl: 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1280&h=720&fit=crop', isLoadingImage: false };
+                          // Trigger scroll to show the loaded fallback image
+                          setTimeout(() => {
+                            scrollToNewSegment(i);
+                          }, 100);
                           break;
                       }
                   }
@@ -238,6 +429,11 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
       console.error("Error generating story segment:", error);
       setIsLoading(false);
       isGeneratingRef.current = false;
+      
+      // DON'T add error response to story history
+      // Remove the last prompt that failed
+      storyHistory.current.pop();
+      
       // Show error state with a retry option
       const errorSegment: StorySegment = {
         type: 'narrator',
@@ -266,6 +462,11 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
     setChoices([]);
     setUserChoiceCount(prev => prev + 1);
 
+    // Scroll to show the user's choice
+    setTimeout(() => {
+      scrollToNewSegment(segments.length); // Scroll to the newly added user segment
+    }, 100);
+
     // Track choice with Mem0
     if (isMemoryAvailable()) {
       const context = storyHistory.current[storyHistory.current.length - 2] || 'story context';
@@ -273,7 +474,7 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
     }
 
     const context = storyHistory.current.join('\n');
-    const nextPrompt = `The story has unfolded as follows:\n${context}\n\nThe user, ${userProfile.name}, who looks like "${userProfile.description}", chose to: "${choice}".\n\nContinue the story based on this choice. If a biblical character is present, have them respond to the user's choice in their dialogue. The user's new choices should allow for further conversation or interaction. IMPORTANT: While the user can influence conversations, the major events, outcomes, and timeline of the story MUST strictly adhere to the biblical narrative. The core biblical events are unchangeable. Generate the next narrative segment, a vivid image prompt that includes the user's character, 2-3 new choices, and a potential bible lesson.`;
+    const nextPrompt = `The story has unfolded as follows:\n${context}\n\nThe user, ${userProfile.name}, who looks like "${userProfile.description}", chose to: "${choice}".\n\nContinue the story based on this choice. If a biblical character is present, have them respond to the user's choice in their dialogue. The user's new choices should allow for further conversation or interaction. IMPORTANT: While the user can influence conversations, the major events, outcomes, and timeline of the story MUST strictly adhere to the biblical narrative. The core biblical events are unchangeable. Generate the next narrative segment, a vivid image prompt that includes the user's character, 2-3 new choices, and specify the current location/setting where this scene takes place. Additionally, generate 0-3 detailed biblical lessons based on the significance of this moment. Each lesson should be comprehensive with theological depth, biblical connections, and practical spiritual applications. Lessons should connect specifically to the events in this segment and can be multi-paragraph when appropriate.`;
     
     // Update character descriptions if new biblical characters are introduced
     const updatedCharacterDesc = generateCharacterDescriptions(userProfile, nextPrompt);
@@ -300,22 +501,203 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
     setIsAnswering(false);
   };
 
-  const handlePlayNarration = (text: string, index: number) => {
-    if (currentlyPlayingIndex === index && speechService.isSpeaking()) {
-      speechService.stop();
-      setCurrentlyPlayingIndex(null);
+  const handlePlayNarration = async (text: string, index: number) => {
+    // If clicking on the currently playing segment
+    if (currentlyPlayingIndex === index) {
+      if (isPaused) {
+        // Resume narration
+        if ((narrationSettings.provider === 'elevenlabs' || narrationSettings.provider === 'speechify') && currentAudioElement) {
+          currentAudioElement.play();
+          setIsPaused(false);
+        } else {
+          speechService.resume();
+          setIsPaused(false);
+        }
+        return;
+      } else {
+        // Pause narration
+        if ((narrationSettings.provider === 'elevenlabs' || narrationSettings.provider === 'speechify') && currentAudioElement) {
+          currentAudioElement.pause();
+          setIsPaused(true);
+        } else {
+          speechService.pause();
+          setIsPaused(true);
+        }
+        return;
+      }
+    }
+
+    // Stop any current narration and start new one
+    speechService.stop();
+    if (currentAudioElement) {
+      currentAudioElement.pause();
+      setCurrentAudioElement(null);
+    }
+    setCurrentlyPlayingIndex(index);
+    setIsPaused(false);
+
+    if (narrationSettings.provider === 'elevenlabs') {
+      await handleElevenLabsNarration(text, index);
+    } else if (narrationSettings.provider === 'speechify') {
+      await handleSpeechifyNarration(text, index);
     } else {
-      speechService.stop();
-      setCurrentlyPlayingIndex(index);
       speechService.speak(
         text,
         narrationSettings,
-        () => setCurrentlyPlayingIndex(null),
+        () => {
+          setCurrentlyPlayingIndex(null);
+          setIsPaused(false);
+        },
         (error) => {
           console.error('Narration error:', error);
           setCurrentlyPlayingIndex(null);
+          setIsPaused(false);
         }
       );
+    }
+  };
+
+  const handleElevenLabsNarration = async (text: string, index: number) => {
+    if (!elevenLabsService.isConfigured()) {
+      console.error('ElevenLabs not configured');
+      setCurrentlyPlayingIndex(null);
+      return;
+    }
+
+    setIsGeneratingAudio(true);
+    
+    try {
+      // Check cache first
+      const cachedAudio = await getCachedAudioBlob(
+        text, 
+        elevenLabsSettings.selectedVoiceId, 
+        1.0, // ElevenLabs doesn't use speed parameter
+        'elevenlabs'
+      );
+
+      let audioBlob: Blob;
+      if (cachedAudio) {
+        audioBlob = cachedAudio;
+      } else {
+        // Generate new audio
+        audioBlob = await elevenLabsService.synthesizeSpeech(text, elevenLabsSettings.selectedVoiceId);
+        
+        // Cache the audio
+        await cacheAudioBlob(
+          text,
+          audioBlob,
+          elevenLabsSettings.selectedVoiceId,
+          1.0,
+          'elevenlabs'
+        );
+      }
+
+      // Play the audio
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      
+      // Store reference for pause/resume functionality
+      setCurrentAudioElement(audio);
+      
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        setCurrentlyPlayingIndex(null);
+        setIsPaused(false);
+        setCurrentAudioElement(null);
+      };
+
+      audio.onerror = () => {
+        console.error('Audio playback error');
+        URL.revokeObjectURL(audioUrl);
+        setCurrentlyPlayingIndex(null);
+        setIsPaused(false);
+        setCurrentAudioElement(null);
+      };
+
+      audio.play();
+    } catch (error) {
+      console.error('ElevenLabs narration error:', error);
+      
+      // Check if it's a quota exceeded error and fallback to Speechify
+      if (error instanceof QuotaExceededError) {
+        console.log('ElevenLabs quota exceeded, falling back to Speechify');
+        // Show notification to user
+        alert('ElevenLabs quota exceeded. Using Speechify as fallback.');
+        
+        // Fallback to Speechify
+        await handleSpeechifyNarration(text, index);
+        return;
+      }
+      
+      setCurrentlyPlayingIndex(null);
+    } finally {
+      setIsGeneratingAudio(false);
+    }
+  };
+
+  const handleSpeechifyNarration = async (text: string, index: number) => {
+    if (!speechifyService.isConfigured()) {
+      console.error('Speechify not configured');
+      setCurrentlyPlayingIndex(null);
+      return;
+    }
+
+    setIsGeneratingAudio(true);
+    
+    try {
+      // Check cache first
+      const cachedAudio = await getCachedAudioBlob(
+        text, 
+        speechifySettings.selectedVoiceId, 
+        1.0, // Speechify doesn't use speed parameter
+        'speechify'
+      );
+
+      let audioBlob: Blob;
+      if (cachedAudio) {
+        audioBlob = cachedAudio;
+      } else {
+        // Generate new audio
+        audioBlob = await speechifyService.synthesizeSpeech(text, speechifySettings.selectedVoiceId);
+        
+        // Cache the audio
+        await cacheAudioBlob(
+          text,
+          audioBlob,
+          speechifySettings.selectedVoiceId,
+          1.0,
+          'speechify'
+        );
+      }
+
+      // Play the audio
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      
+      // Store reference for pause/resume functionality
+      setCurrentAudioElement(audio);
+      
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        setCurrentlyPlayingIndex(null);
+        setIsPaused(false);
+        setCurrentAudioElement(null);
+      };
+
+      audio.onerror = () => {
+        console.error('Audio playback error');
+        URL.revokeObjectURL(audioUrl);
+        setCurrentlyPlayingIndex(null);
+        setIsPaused(false);
+        setCurrentAudioElement(null);
+      };
+
+      audio.play();
+    } catch (error) {
+      console.error('Speechify narration error:', error);
+      setCurrentlyPlayingIndex(null);
+    } finally {
+      setIsGeneratingAudio(false);
     }
   };
 
@@ -323,41 +705,69 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
     setShowBibleModal(true);
   };
 
+  const stopAllNarration = () => {
+    // Stop Web Speech API narration
+    speechService.stop();
+    
+    // Stop ElevenLabs audio if playing
+    if (currentAudioElement) {
+      currentAudioElement.pause();
+      setCurrentAudioElement(null);
+    }
+    
+    // Reset all narration state
+    setCurrentlyPlayingIndex(null);
+    setIsPaused(false);
+    setCurrentAudioElement(null);
+  };
+
   const handleCompletionModalClose = () => {
+    stopAllNarration();
     setShowCompletionModal(false);
     onExit(); // Return to story select
   };
 
   return (
     <div className="min-h-screen bg-stone-100 flex flex-col">
-      <header className="bg-white/80 backdrop-blur-sm shadow-md p-4 sticky top-0 z-10 border-b">
-        <div className="flex justify-between items-center mb-3">
-          <h1 className="text-2xl font-bold font-serif text-stone-800">
+      <header className="bg-white/80 backdrop-blur-sm shadow-md p-3 md:p-4 sticky top-0 z-10 border-b">
+        <div className="flex justify-between items-center mb-2 md:mb-3">
+          <h1 className="text-lg md:text-2xl font-bold font-script text-stone-800 truncate flex-1 mr-3">
             {story.title}
-            {isReplayMode && <span className="ml-3 text-sm bg-green-100 text-green-800 px-2 py-1 rounded-full">Replay Mode</span>}
+            {isReplayMode && <span className="ml-2 md:ml-3 text-xs md:text-sm bg-green-100 text-green-800 px-1 md:px-2 py-1 rounded-full">Replay</span>}
           </h1>
-          <button onClick={onExit} className="bg-stone-200 hover:bg-stone-300 text-stone-700 font-semibold py-2 px-4 rounded-lg transition-colors">
-            Exit Story
-          </button>
-        </div>
-        {/* Progress Bar */}
-        <div className="w-full">
-          <div className="flex justify-between items-center mb-1">
-            <span className="text-sm font-semibold text-stone-600">Progress</span>
-            <span className="text-sm font-semibold text-stone-600">{progressPercentage}%</span>
-          </div>
-          <div className="w-full bg-stone-200 rounded-full h-2">
-            <div 
-              className="bg-amber-500 h-2 rounded-full transition-all duration-300 ease-out"
-              style={{ width: `${progressPercentage}%` }}
-            ></div>
+          <div className="flex items-center gap-2 md:gap-3 flex-shrink-0">
+            <button 
+              onClick={() => {
+                stopAllNarration();
+                onExit();
+              }} 
+              className="bg-stone-200 hover:bg-stone-300 text-stone-700 font-semibold py-2 px-3 md:px-4 rounded-lg transition-colors text-sm md:text-base"
+            >
+              <span className="hidden md:inline">Exit Story</span>
+              <span className="md:hidden">Exit</span>
+            </button>
           </div>
         </div>
+        {/* Progress Bar - Hidden in replay mode */}
+        {!isReplayMode && (
+          <div className="w-full">
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-xs md:text-sm font-semibold text-stone-600">Progress</span>
+              <span className="text-xs md:text-sm font-semibold text-stone-600">{progressPercentage}%</span>
+            </div>
+            <div className="w-full bg-stone-200 rounded-full h-1.5 md:h-2">
+              <div 
+                className="bg-amber-500 h-1.5 md:h-2 rounded-full transition-all duration-300 ease-out"
+                style={{ width: `${progressPercentage}%` }}
+              ></div>
+            </div>
+          </div>
+        )}
       </header>
 
-      <main className="flex-grow p-4 md:p-6 space-y-6 overflow-y-auto">
+      <main className="flex-grow p-4 md:p-6 space-y-4 md:space-y-6 overflow-y-auto">
         {segments.map((segment, index) => (
-          <div key={index} className={`max-w-4xl mx-auto w-full flex flex-col ${segment.type === 'user' || segment.type === 'question' ? 'items-end' : 'items-start'}`}>
+          <div key={index} data-segment-index={index} className={`max-w-4xl mx-auto w-full flex flex-col ${segment.type === 'user' || segment.type === 'question' ? 'items-end' : 'items-start'}`}>
             {segment.type === 'narrator' && (
               <div className="w-full bg-white rounded-2xl shadow-lg border border-stone-200/50 overflow-hidden">
                 <div className="w-full aspect-video bg-stone-200 flex items-center justify-center">
@@ -369,23 +779,43 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
                     <div className="text-stone-400">No media available</div>
                   )}
                 </div>
-                <div className="p-6">
+                <div className="p-4 md:p-6 parchment-bg border-l-4 border-amber-300 shadow-lg">
                   <div className="flex items-start justify-between gap-4">
-                    <p className="flex-grow text-stone-700 leading-relaxed whitespace-pre-wrap">{segment.text}</p>
+                    <div 
+                      className={`flex-grow ${NARRATIVE_TYPOGRAPHY.textColor} ${NARRATIVE_TYPOGRAPHY.lineHeight} ${NARRATIVE_TYPOGRAPHY.fontSize} ${NARRATIVE_TYPOGRAPHY.fontFamily}`}
+                      dangerouslySetInnerHTML={{ 
+                        __html: '<p>' + addDropCap(formatNarrative(segment.text)).replace(/\n\n/g, '</p><p class="' + NARRATIVE_TYPOGRAPHY.paragraphSpacing + '">') + '</p>'
+                      }}
+                    />
                     {narrationSettings.enabled && (
                       <button
                         onClick={() => handlePlayNarration(segment.text, index)}
+                        disabled={isGeneratingAudio && currentlyPlayingIndex === index}
                         className={`flex-shrink-0 p-2 rounded-lg transition-colors ${
                           currentlyPlayingIndex === index 
                             ? 'bg-amber-500 text-white' 
                             : 'bg-stone-100 hover:bg-stone-200 text-stone-700'
-                        }`}
-                        title={currentlyPlayingIndex === index ? 'Stop narration' : 'Play narration'}
+                        } disabled:opacity-50 disabled:cursor-not-allowed`}
+                        title={
+                          isGeneratingAudio && currentlyPlayingIndex === index 
+                            ? 'Generating audio...' 
+                            : currentlyPlayingIndex === index 
+                              ? (isPaused ? 'Resume narration' : 'Pause narration')
+                              : 'Play narration'
+                        }
                       >
-                        {currentlyPlayingIndex === index ? (
-                          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
-                          </svg>
+                        {isGeneratingAudio && currentlyPlayingIndex === index ? (
+                          <LoadingSpinner className="w-5 h-5" />
+                        ) : currentlyPlayingIndex === index ? (
+                          isPaused ? (
+                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+                            </svg>
+                          ) : (
+                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                            </svg>
+                          )
                         ) : (
                           <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
                             <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
@@ -398,8 +828,9 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
               </div>
             )}
             {segment.type === 'user' && (
-              <div className="bg-amber-500 text-white p-3 rounded-2xl rounded-br-none shadow-md max-w-lg">
-                <p className="font-semibold">{segment.text}</p>
+              <div className="bg-amber-50 border-2 border-amber-300 text-stone-800 p-4 rounded-xl shadow-lg max-w-lg relative ornate-border">
+                <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-amber-100/50 to-transparent pointer-events-none"></div>
+                <p className="font-serif text-lg leading-relaxed relative z-10">{segment.text}</p>
               </div>
             )}
             {segment.type === 'question' && (
@@ -412,11 +843,106 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
                 <p><strong className="font-serif">Answer:</strong> {segment.text}</p>
               </div>
             )}
-            {segment.type === 'lesson' && (
-              <div className="bg-amber-100 border-l-4 border-amber-500 text-amber-800 p-4 rounded-r-lg shadow-md max-w-lg">
-                <p><strong className="font-serif">Lesson:</strong> {segment.text}</p>
-              </div>
-            )}
+            {segment.type === 'lesson' && (() => {
+              const lessons = JSON.parse(segment.text);
+              const segmentId = `${segments.indexOf(segment)}`;
+              
+              return (
+                <div className="w-full max-w-5xl mx-auto lesson-entrance">
+                  <div className="bg-white rounded-3xl shadow-2xl border-4 border-amber-300 overflow-hidden ornate-border">
+                    {/* Decorative header */}
+                    <div className="bg-gradient-to-r from-amber-100 to-orange-100 p-4 border-b-2 border-amber-200">
+                      <div className="flex items-center justify-center space-x-3">
+                        <svg className="w-8 h-8 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.746 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                        </svg>
+                        <h3 className="text-2xl font-bold text-amber-800 font-script">
+                          Divine Lesson{lessons.length > 1 ? 's' : ''}
+                        </h3>
+                        <svg className="w-8 h-8 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.746 0 3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                        </svg>
+                      </div>
+                    </div>
+                    
+                    {/* Lessons content */}
+                    <div className="parchment-bg p-6 space-y-4">
+                      {lessons.map((lesson: string, index: number) => {
+                        const lessonId = `${segmentId}-${index}`;
+                        const isExpanded = expandedLessons.has(lessonId);
+                        const isLoadingTitle = lessonTitlesLoading.has(lessonId);
+                        const title = lessonTitles.get(lessonId);
+                        
+                        // Generate title if needed (this will be called on each render but has internal caching)
+                        generateLessonTitleIfNeeded(lessonId, lesson);
+                        
+                        return (
+                          <div key={lessonId} className="border border-amber-200 rounded-xl overflow-hidden bg-amber-50/50">
+                            {/* Lesson header with expand/collapse */}
+                            <button
+                              onClick={() => toggleLessonExpansion(lessonId)}
+                              className="w-full p-4 text-left hover:bg-amber-100/50 transition-colors"
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex-1">
+                                  {/* Lesson title */}
+                                  <h4 className="text-lg font-bold text-amber-900 mb-1">
+                                    {isLoadingTitle ? (
+                                      <span className="flex items-center space-x-2">
+                                        <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        <span>Generating title...</span>
+                                      </span>
+                                    ) : (
+                                      title || `Lesson ${index + 1}`
+                                    )}
+                                  </h4>
+                                  {/* Click to expand text */}
+                                  <p className="text-sm text-gray-600">
+                                    {isExpanded ? 'Click to collapse' : 'Click to expand'}
+                                  </p>
+                                </div>
+                                <svg 
+                                  className={`w-5 h-5 text-amber-600 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                                  fill="none" 
+                                  stroke="currentColor" 
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </div>
+                            </button>
+                            
+                            {/* Full lesson content (collapsible) */}
+                            {isExpanded && (
+                              <div className="px-4 pb-4 animate-fadeIn">
+                                <div className="border-t border-amber-200 pt-3">
+                                  <p className="text-amber-900 leading-relaxed text-lg font-script" 
+                                     dangerouslySetInnerHTML={{ 
+                                       __html: '<p>' + formatNarrative(lesson).replace(/\n\n/g, '</p><p class="mt-4">') + '</p>'
+                                     }} />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    
+                    {/* Decorative footer */}
+                    <div className="bg-gradient-to-r from-amber-200 to-orange-200 p-3">
+                      <div className="flex items-center justify-center space-x-2">
+                        <div className="w-3 h-3 bg-amber-600 rounded-full"></div>
+                        <div className="w-3 h-3 bg-amber-500 rounded-full"></div>
+                        <div className="w-3 h-3 bg-amber-600 rounded-full"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         ))}
 
@@ -433,12 +959,12 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
           )}
           {!isLoading && choices.length > 0 && !isReplayMode && (
             <>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 md:gap-3">
                 {choices.map((choice, index) => (
                   <button
                     key={index}
                     onClick={() => handleChoice(choice)}
-                    className="w-full text-left bg-white hover:bg-amber-100 border border-stone-300 text-stone-700 font-semibold py-3 px-4 rounded-lg transition-all duration-200 shadow-sm hover:shadow-md hover:border-amber-400 active:scale-[0.98]"
+                    className="w-full text-left bg-white hover:bg-amber-100 border border-stone-300 text-stone-700 font-medium md:font-semibold py-2 md:py-3 px-3 md:px-4 rounded-lg transition-all duration-200 shadow-sm hover:shadow-md hover:border-amber-400 active:scale-[0.98] text-sm md:text-base"
                   >
                     {choice}
                   </button>
@@ -469,8 +995,16 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
             </>
           )}
           {isReplayMode && !isLoading && (
-            <div className="text-center text-stone-600 py-4">
-              <p className="text-sm">Replaying completed story - scroll up to review your journey!</p>
+            <div className="text-center py-4">
+              <p className="text-sm text-stone-600 mb-4">Replaying completed story - scroll up to review your journey!</p>
+              {story.bibleReference && (
+                <button
+                  onClick={handleViewBibleText}
+                  className="bg-amber-500 hover:bg-amber-600 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
+                >
+                  Read Original Bible Story
+                </button>
+              )}
             </div>
           )}
         </div>

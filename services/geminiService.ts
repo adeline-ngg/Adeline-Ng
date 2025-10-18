@@ -2,11 +2,11 @@ import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { GeminiStoryResponse } from '../types';
 
 const getAI = () => {
-    const apiKey = process.env.API_KEY;
+    const apiKey = import.meta.env.VITE_GEMINI_KEY || import.meta.env.VITE_GEMINI_API_KEY || import.meta.env.VITE_API_KEY;
     if (!apiKey) {
-        console.error("⚠️ GEMINI_API_KEY not found in environment variables!");
-        console.error("Please create a .env file with: GEMINI_API_KEY=your_api_key_here");
-        throw new Error("API_KEY environment variable is not set. Please add GEMINI_API_KEY to your .env file.");
+        console.error("⚠️ VITE_GEMINI_API_KEY not found in environment variables!");
+        console.error("Please create a .env file with: VITE_GEMINI_API_KEY=your_api_key_here");
+        throw new Error("VITE_GEMINI_API_KEY environment variable is not set. Please add VITE_GEMINI_API_KEY to your .env file.");
     }
     return new GoogleGenAI({ apiKey });
 };
@@ -28,13 +28,18 @@ const storyResponseSchema = {
             items: { type: Type.STRING },
             description: "An array of 2-3 short, compelling choices for the user to make that will influence the story. Must not be empty."
         },
-        lesson: {
-            type: Type.STRING,
-            description: "A concise biblical lesson or moral that can be drawn from the current story segment. Null if no lesson is immediately apparent."
+        lessons: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "An array of 0-3 detailed biblical lessons or morals that can be drawn from the current story segment. Each lesson should be comprehensive, including theological context, biblical connections, and practical spiritual applications. Lessons should be multi-paragraph when appropriate and connect specifically to the events in this segment. Return empty array if no lessons are immediately apparent."
         },
         isComplete: {
             type: Type.BOOLEAN,
             description: "True if the core biblical narrative has reached its natural conclusion. For example: Daniel saved from lions and justice served, Moses crossed the Red Sea, David defeated Goliath, etc. Set to true when the main biblical event concludes, regardless of how many user choices have been made."
+        },
+        location: {
+            type: Type.STRING,
+            description: "The current location or setting where this scene takes place. This helps maintain visual consistency across images. Examples: 'palace', 'lions den', 'valley of elah', 'red sea shore', etc."
         },
     },
     required: ["narrative", "imagePrompt", "choices"],
@@ -60,8 +65,9 @@ export const generateStorySegment = async (prompt: string): Promise<GeminiStoryR
             narrative: parsed.narrative,
             imagePrompt: parsed.imagePrompt,
             choices: parsed.choices,
-            lesson: parsed.lesson ?? null,
+            lessons: parsed.lessons ?? [],
             isComplete: parsed.isComplete ?? false,
+            location: parsed.location ?? null,
         };
 
         // Ensure choices are never empty
@@ -82,8 +88,9 @@ export const generateStorySegment = async (prompt: string): Promise<GeminiStoryR
             narrative: narrative,
             imagePrompt: "A serene, empty landscape under a cloudy sky, historically accurate.",
             choices: ["Try again..."],
-            lesson: "Patience is a virtue, especially when the path is unclear.",
-            isComplete: false
+            lessons: ["Patience is a virtue, especially when the path is unclear."],
+            isComplete: false,
+            isFallback: true  // Add flag to identify fallback responses
         };
     }
 };
@@ -145,11 +152,12 @@ export const generateSceneImage = async (prompt: string): Promise<string> => {
 
 /**
  * Generate a single static scene image with character consistency
- * Accepts character descriptions to ensure consistent character appearance
+ * Accepts character descriptions and environment descriptions to ensure consistent appearance
  */
 export const generateSceneImageWithCharacters = async (
     prompt: string, 
-    characterDescriptions?: string
+    characterDescriptions?: string,
+    environmentDescription?: string
 ): Promise<string> => {
     const ai = getAI();
     
@@ -162,10 +170,18 @@ export const generateSceneImageWithCharacters = async (
         console.log('Starting image generation for prompt:', prompt.substring(0, 100) + '...');
         const startTime = Date.now();
         
-        // Enhance prompt with character descriptions if provided
-        const enhancedPrompt = characterDescriptions 
-            ? `Character descriptions: ${characterDescriptions}. ${prompt}, 4k, photo-realistic, historically accurate, cinematic lighting, dramatic, high-detail`
-            : `${prompt}, 4k, photo-realistic, historically accurate, cinematic lighting, dramatic, high-detail`;
+        // Enhance prompt with character and environment descriptions if provided
+        let enhancedPrompt = prompt;
+        
+        if (characterDescriptions) {
+            enhancedPrompt = `Characters: ${characterDescriptions}. ${enhancedPrompt}`;
+        }
+        
+        if (environmentDescription) {
+            enhancedPrompt = `Environment and setting: ${environmentDescription}. ${enhancedPrompt}`;
+        }
+        
+        enhancedPrompt += ', 4k, photo-realistic, historically accurate, cinematic lighting, dramatic, high-detail';
         
         console.log('Calling Imagen API...');
         
@@ -205,6 +221,33 @@ export const generateSceneImageWithCharacters = async (
     }
 };
 
+export const generateLessonTitle = async (lessonText: string): Promise<string> => {
+    const ai = getAI();
+    try {
+        const prompt = `Generate a concise, descriptive title for this biblical lesson. The title should be 6-10 words and capture the main spiritual principle or moral being taught.
+
+Lesson text: "${lessonText}"
+
+Return only the title, no quotes or additional text.`;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                temperature: 0.3, // Lower temperature for more consistent, focused titles
+            },
+        });
+
+        const title = response.text.trim().replace(/^["']|["']$/g, ''); // Remove any surrounding quotes
+        return title || lessonText.split('.')[0].substring(0, 50) + '...'; // Fallback to first sentence
+    } catch (error) {
+        console.error("Error generating lesson title:", error);
+        // Fallback to first sentence or first 50 characters
+        const firstSentence = lessonText.split('.')[0];
+        return firstSentence.length > 50 ? firstSentence.substring(0, 50) + '...' : firstSentence;
+    }
+};
+
 export const generateAvatarImage = async (prompt: string): Promise<string> => {
     const ai = getAI();
     try {
@@ -223,12 +266,42 @@ export const generateAvatarImage = async (prompt: string): Promise<string> => {
             const base64ImageBytes: string = response.generatedImages[0].image.imageBytes;
             return `data:image/jpeg;base64,${base64ImageBytes}`;
         }
+        
+        // Log response structure for debugging
+        console.error("No images in response:", JSON.stringify(response, null, 2));
+        console.error("Response structure:", {
+            hasGeneratedImages: !!response.generatedImages,
+            generatedImagesLength: response.generatedImages?.length || 0,
+            responseKeys: Object.keys(response || {})
+        });
+        
         throw new Error("No image generated for avatar");
     } catch (error) {
         console.error("Error generating avatar image:", error);
-        if (error instanceof Error && (error.message.includes('RESOURCE_EXHAUSTED') || error.message.includes('quota'))) {
-            throw new Error("You have exceeded your request limit for image generation. Please check your API key's plan and billing details, or try again later.");
+        console.error("Error details:", JSON.stringify(error, null, 2));
+        
+        if (error instanceof Error) {
+            // Log the full error message for debugging
+            console.error("Error message:", error.message);
+            console.error("Error stack:", error.stack);
+            
+            // Check for specific error types
+            if (error.message.includes('RESOURCE_EXHAUSTED') || error.message.includes('quota')) {
+                throw new Error("You have exceeded your request limit for image generation. Please check your API key's plan and billing details, or try again later.");
+            } else if (error.message.includes('PERMISSION_DENIED') || error.message.includes('403')) {
+                throw new Error("Image generation API access denied. Please check your API key permissions and billing.");
+            } else if (error.message.includes('INVALID_ARGUMENT') || error.message.includes('400')) {
+                throw new Error("Invalid request parameters for image generation. Please try with a different description.");
+            } else if (error.message.includes('UNAUTHENTICATED') || error.message.includes('401')) {
+                throw new Error("Invalid API key for image generation. Please check your Gemini API key configuration.");
+            } else if (error.message.includes('timeout')) {
+                throw new Error("Image generation timed out. Please try again.");
+            }
+            
+            // Re-throw with original error message for better debugging
+            throw new Error(`Gemini image generation error: ${error.message}`);
         }
+        
         throw new Error("An unexpected error occurred while generating the avatar. Please try again.");
     }
 };

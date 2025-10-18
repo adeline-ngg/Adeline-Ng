@@ -6,11 +6,17 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "generate-covers": "tsx scripts/generateStoryCovers.ts",
+    "download-artwork": "node scripts/downloadBiblicalArtwork.js",
+    "verify-covers": "node scripts/verifyStoryCovers.js"
   },
   "dependencies": {
+    "@elevenlabs/elevenlabs-js": "^2.19.0",
     "@google/genai": "^1.25.0",
+    "@speechify/api": "^1.0.0",
     "idb": "^8.0.0",
+    "jspdf": "^2.5.2",
     "mem0ai": "^2.1.38",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
@@ -18,6 +24,7 @@
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "tsx": "^4.20.6",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }

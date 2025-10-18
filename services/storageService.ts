@@ -1,10 +1,13 @@
-import { UserProfile, SavedProfile, StoryProgress, SavedProgress, AppSettings, NarrationSettings } from '../types';
+import { UserProfile, SavedProfile, StoryProgress, SavedProgress, AppSettings, NarrationSettings, ElevenLabsSettings, SpeechifySettings, StoryLesson, TutorialCompletion } from '../types';
 import { getDefaultNarrationSettings } from './speechService';
+import { elevenLabsService } from './elevenLabsService';
+import { speechifyService } from './speechifyService';
 
 // Storage keys
 const PROFILE_KEY = 'biblical-journeys-profile';
 const PROGRESS_KEY = 'biblical-journeys-progress';
 const SETTINGS_KEY = 'biblical-journeys-settings';
+const TUTORIAL_KEY = 'biblical-journeys-tutorial';
 
 /**
  * Profile Storage
@@ -141,20 +144,33 @@ export function loadSettings(): AppSettings {
   try {
     const saved = localStorage.getItem(SETTINGS_KEY);
     if (!saved) {
+      console.log('Storage: No saved settings found, returning defaults');
       return getDefaultSettings();
     }
     
     const settings: AppSettings = JSON.parse(saved);
+    console.log('Storage: Loaded settings from localStorage:', settings);
     
     // Merge with defaults to handle new settings fields
-    return {
+    const mergedSettings = {
       ...getDefaultSettings(),
       ...settings,
       narration: {
         ...getDefaultSettings().narration,
         ...settings.narration,
       },
+      elevenLabs: {
+        ...getDefaultSettings().elevenLabs,
+        ...settings.elevenLabs,
+      },
+      speechify: {
+        ...getDefaultSettings().speechify,
+        ...settings.speechify,
+      },
     };
+    
+    console.log('Storage: Merged settings:', mergedSettings);
+    return mergedSettings;
   } catch (error) {
     console.error('Error loading settings:', error);
     return getDefaultSettings();
@@ -162,14 +178,40 @@ export function loadSettings(): AppSettings {
 }
 
 export function saveNarrationSettings(narration: NarrationSettings): void {
+  console.log('Storage: Saving narration settings:', narration);
   const settings = loadSettings();
   settings.narration = narration;
   saveSettings(settings);
+  console.log('Storage: Narration settings saved successfully');
+}
+
+export function saveElevenLabsSettings(elevenLabs: ElevenLabsSettings): void {
+  const settings = loadSettings();
+  settings.elevenLabs = elevenLabs;
+  saveSettings(settings);
+}
+
+export function loadElevenLabsSettings(): ElevenLabsSettings {
+  const settings = loadSettings();
+  return settings.elevenLabs;
+}
+
+export function saveSpeechifySettings(speechify: SpeechifySettings): void {
+  const settings = loadSettings();
+  settings.speechify = speechify;
+  saveSettings(settings);
+}
+
+export function loadSpeechifySettings(): SpeechifySettings {
+  const settings = loadSettings();
+  return settings.speechify;
 }
 
 function getDefaultSettings(): AppSettings {
   return {
     narration: getDefaultNarrationSettings(),
+    elevenLabs: elevenLabsService.getDefaultSettings(),
+    speechify: speechifyService.getDefaultSettings(),
   };
 }
 
@@ -253,5 +295,145 @@ export function importData(jsonString: string): boolean {
     console.error('Error importing data:', error);
     return false;
   }
+}
+
+/**
+ * Tutorial Completion Storage
+ */
+
+export function saveTutorialCompletion(completion: TutorialCompletion): void {
+  try {
+    localStorage.setItem(TUTORIAL_KEY, JSON.stringify(completion));
+  } catch (error) {
+    console.error('Error saving tutorial completion:', error);
+  }
+}
+
+export function loadTutorialCompletion(): TutorialCompletion {
+  try {
+    const saved = localStorage.getItem(TUTORIAL_KEY);
+    if (!saved) {
+      return {
+        hasCompletedTutorial: false,
+        skippedTutorial: false,
+      };
+    }
+    return JSON.parse(saved);
+  } catch (error) {
+    console.error('Error loading tutorial completion:', error);
+    return {
+      hasCompletedTutorial: false,
+      skippedTutorial: false,
+    };
+  }
+}
+
+/**
+ * Data Migration Functions
+ */
+
+export function migrateLessonFormat(): void {
+  try {
+    const allProgress = loadAllProgress();
+    let migrationNeeded = false;
+    
+    Object.entries(allProgress).forEach(([storyId, progress]) => {
+      if (progress.segments) {
+        progress.segments.forEach((segment) => {
+          if (segment.type === 'lesson' && segment.text) {
+            try {
+              // Try to parse as JSON array (new format)
+              JSON.parse(segment.text);
+              // If parsing succeeds, it's already in new format
+            } catch {
+              // If parsing fails, it's in old format - convert it
+              const oldLesson = segment.text;
+              segment.text = JSON.stringify([oldLesson]); // Convert to array format
+              migrationNeeded = true;
+            }
+          }
+        });
+        
+        if (migrationNeeded) {
+          saveStoryProgress(storyId, progress);
+        }
+      }
+    });
+    
+    if (migrationNeeded) {
+      console.log('Lesson format migration completed successfully');
+    }
+  } catch (error) {
+    console.error('Error during lesson format migration:', error);
+  }
+}
+
+/**
+ * Lessons Summary Storage
+ */
+
+export function getAllStoryLessons(): StoryLesson[] {
+  try {
+    const allProgress = loadAllProgress();
+    const lessons: StoryLesson[] = [];
+    
+    Object.entries(allProgress).forEach(([storyId, progress]) => {
+      if (progress.isCompleted && progress.segments) {
+        // Find story title from constants (we'll need to import STORIES)
+        const storyTitle = getStoryTitle(storyId);
+        
+        progress.segments.forEach((segment, index) => {
+          if (segment.type === 'lesson' && segment.text) {
+            try {
+              // Try to parse as JSON array (new format)
+              const lessonsArray = JSON.parse(segment.text);
+              if (Array.isArray(lessonsArray)) {
+                lessonsArray.forEach((lessonText, lessonIndex) => {
+                  lessons.push({
+                    storyId,
+                    storyTitle,
+                    lesson: lessonText,
+                    completionDate: progress.completionDate || progress.lastUpdated,
+                    segmentIndex: index,
+                    lessonIndex: lessonIndex,
+                  });
+                });
+              }
+            } catch {
+              // If parsing fails, treat as single lesson (old format)
+              lessons.push({
+                storyId,
+                storyTitle,
+                lesson: segment.text,
+                completionDate: progress.completionDate || progress.lastUpdated,
+                segmentIndex: index,
+                lessonIndex: 0,
+              });
+            }
+          }
+        });
+      }
+    });
+    
+    // Sort by completion date (most recent first)
+    return lessons.sort((a, b) => b.completionDate - a.completionDate);
+  } catch (error) {
+    console.error('Error getting all story lessons:', error);
+    return [];
+  }
+}
+
+// Helper function to get story title by ID
+function getStoryTitle(storyId: string): string {
+  // This will be imported from constants in the actual implementation
+  const storyTitles: { [key: string]: string } = {
+    'moses-red-sea': 'Moses and the Red Sea',
+    'david-goliath': 'David and Goliath',
+    'daniel-lions': 'Daniel in the Lion\'s Den',
+    'noahs-ark': 'Noah\'s Ark',
+    'nativity': 'The Nativity',
+    'resurrection': 'The Resurrection',
+  };
+  return storyTitles[storyId] || 'Unknown Story';
 }
 

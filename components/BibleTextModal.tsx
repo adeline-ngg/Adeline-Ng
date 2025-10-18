@@ -58,8 +58,8 @@ const BibleTextModal: React.FC<BibleTextModalProps> = ({
         <div className="bg-amber-500 text-white p-4 rounded-t-lg">
           <div className="flex justify-between items-center">
             <div>
-              <h2 className="text-xl font-bold">Original Bible Story</h2>
-              <p className="text-amber-100 text-sm">{storyTitle}</p>
+              <h2 className="text-xl font-bold font-script">Original Bible Story</h2>
+              <p className="text-amber-100 text-sm font-serif">{storyTitle}</p>
             </div>
             <button
               onClick={handleClose}
@@ -95,10 +95,10 @@ const BibleTextModal: React.FC<BibleTextModalProps> = ({
             <div className="space-y-6">
               {/* Reference Header */}
               <div className="bg-stone-50 border-l-4 border-amber-500 p-4 rounded-r-lg">
-                <h3 className="font-bold text-stone-800 text-lg">
+                <h3 className="font-bold text-stone-800 text-lg font-script">
                   {formatBibleReference(bibleReference.book, bibleReference.chapters, bibleReference.verses)}
                 </h3>
-                <p className="text-stone-600 text-sm mt-1">
+                <p className="text-stone-600 text-sm mt-1 font-serif">
                   {getBibleSummary(chapters)} • {chapters[0]?.translation || 'KJV'}
                 </p>
               </div>
@@ -107,7 +107,7 @@ const BibleTextModal: React.FC<BibleTextModalProps> = ({
               {chapters.map((chapter, chapterIndex) => (
                 <div key={`${chapter.book}-${chapter.chapter}`} className="space-y-4">
                   {chapters.length > 1 && (
-                    <h4 className="font-bold text-stone-800 text-lg border-b border-stone-200 pb-2">
+                    <h4 className="font-bold text-stone-800 text-lg border-b border-stone-200 pb-2 font-script">
                       Chapter {chapter.chapter}
                     </h4>
                   )}
@@ -118,7 +118,7 @@ const BibleTextModal: React.FC<BibleTextModalProps> = ({
                         <span className="text-amber-600 font-bold text-sm mr-3 mt-1 min-w-[3rem] text-right">
                           {verse.verse}
                         </span>
-                        <p className="text-stone-700 leading-relaxed flex-1">
+                        <p className="text-stone-700 leading-relaxed flex-1 font-serif">
                           {verse.text}
                         </p>
                       </div>
@@ -129,7 +129,7 @@ const BibleTextModal: React.FC<BibleTextModalProps> = ({
 
               {/* Footer */}
               <div className="bg-stone-50 border-t border-stone-200 pt-4 mt-6">
-                <p className="text-stone-500 text-sm text-center">
+                <p className="text-stone-500 text-sm text-center font-serif">
                   Scripture from {chapters[0]?.translation || 'King James Version'}
                 </p>
               </div>
@@ -140,7 +140,7 @@ const BibleTextModal: React.FC<BibleTextModalProps> = ({
         {/* Footer */}
         <div className="bg-stone-50 border-t border-stone-200 p-4 rounded-b-lg">
           <div className="flex justify-between items-center">
-            <p className="text-stone-500 text-sm">
+            <p className="text-stone-500 text-sm font-serif">
               Compare with your interactive story experience
             </p>
             <button
