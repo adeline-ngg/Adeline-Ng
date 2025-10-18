@@ -13,16 +13,23 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ onProfileCreate }) => {
   const [avatarDescription, setAvatarDescription] = useState('A young shepherd with kind eyes');
   const [generatedAvatarUrl, setGeneratedAvatarUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
 
   const handleGenerateAvatar = async () => {
     if (!avatarDescription.trim() || isGenerating) return;
     setIsGenerating(true);
     setGeneratedAvatarUrl(null);
+    setAvatarError(null);
     try {
       const imageUrl = await generateAvatarImage(avatarDescription);
       setGeneratedAvatarUrl(imageUrl);
     } catch (error) {
       console.error("Failed to generate avatar:", error);
+      if (error instanceof Error) {
+        setAvatarError(error.message);
+      } else {
+        setAvatarError("An unknown error occurred while generating the avatar.");
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -65,7 +72,10 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ onProfileCreate }) => {
               id="avatar-desc"
               rows={2}
               value={avatarDescription}
-              onChange={(e) => setAvatarDescription(e.target.value)}
+              onChange={(e) => {
+                setAvatarDescription(e.target.value);
+                setAvatarError(null);
+              }}
               placeholder="e.g., A wise carpenter with a kind smile"
               className="shadow-inner appearance-none border border-stone-300 rounded-lg w-full py-3 px-4 text-stone-700 leading-tight focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white/70"
             />
@@ -91,6 +101,9 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ onProfileCreate }) => {
             >
                 {isGenerating ? 'Generating...' : 'Generate Avatar'}
             </button>
+            {avatarError && (
+              <p className="text-red-600 text-sm mt-2 text-center max-w-xs">{avatarError}</p>
+            )}
           </div>
 
           <button

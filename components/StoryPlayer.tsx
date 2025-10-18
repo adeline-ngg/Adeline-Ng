@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Story, UserProfile, StorySegment, GeminiStoryResponse } from '../types';
-import { generateStorySegment, generateSceneVideo, generateClarification } from '../services/geminiService';
+import { generateStorySegment, generateSceneImage, generateClarification } from '../services/geminiService';
 import LoadingSpinner from './LoadingSpinner';
 
 interface StoryPlayerProps {
@@ -38,7 +38,7 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, onExit })
     const newNarratorSegment: StorySegment = {
       type: 'narrator',
       text: response.narrative,
-      isLoadingMedia: true,
+      isLoadingImage: true,
     };
 
     setSegments(prev => [...prev, newNarratorSegment]);
@@ -47,19 +47,33 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, onExit })
     
     const imageGenerationPrompt = `${response.imagePrompt}, which also includes ${userProfile.name}, who is described as: "${userProfile.description}"`;
 
-    generateSceneVideo(imageGenerationPrompt).then(media => {
+    try {
+        const imageUrl = await generateSceneImage(imageGenerationPrompt);
         setSegments(prev => {
             const newSegments = [...prev];
             // Find the last segment that is a narrator segment and is loading media
             for (let i = newSegments.length - 1; i >= 0; i--) {
-                if (newSegments[i].type === 'narrator' && newSegments[i].isLoadingMedia) {
-                    newSegments[i] = { ...newSegments[i], mediaUrl: media.url, mediaType: media.type, isLoadingMedia: false };
+                if (newSegments[i].type === 'narrator' && newSegments[i].isLoadingImage) {
+                    newSegments[i] = { ...newSegments[i], imageUrl: imageUrl, isLoadingImage: false };
                     break; // Stop after updating the most recent one
                 }
             }
             return newSegments;
         });
-    });
+    } catch (error) {
+        console.error("Failed to generate scene image:", error);
+         setSegments(prev => {
+             const newSegments = [...prev];
+            for (let i = newSegments.length - 1; i >= 0; i--) {
+                if (newSegments[i].type === 'narrator' && newSegments[i].isLoadingImage) {
+                    newSegments[i] = { ...newSegments[i], imageUrl: 'https://picsum.photos/seed/error/1280/720', isLoadingImage: false };
+                    break;
+                }
+            }
+            return newSegments;
+        });
+    }
+
 
     if (response.lesson) {
         const lessonSegment: StorySegment = {
@@ -75,8 +89,8 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, onExit })
         .replace('{userName}', userProfile.name)
         .replace('{userAvatarDescription}', userProfile.description);
     fetchNextSegment(initialPrompt);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [story, userProfile.name, userProfile.description]);
+  // FIX: Added fetchNextSegment to dependency array to follow rules of hooks.
+  }, [story, userProfile.name, userProfile.description, fetchNextSegment]);
 
   const handleChoice = (choice: string) => {
     const userSegment: StorySegment = {
@@ -87,7 +101,7 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, onExit })
     setChoices([]);
 
     const context = storyHistory.current.join('\n');
-    const nextPrompt = `The story has unfolded as follows:\n${context}\n\nThe user, ${userProfile.name}, who looks like "${userProfile.description}", chose to: "${choice}".\n\nContinue the story based on this choice. Generate the next narrative segment, a vivid video prompt that includes the user's character, new choices, and a potential bible lesson.`;
+    const nextPrompt = `The story has unfolded as follows:\n${context}\n\nThe user, ${userProfile.name}, who looks like "${userProfile.description}", chose to: "${choice}".\n\nContinue the story based on this choice. If a biblical character is present, have them respond to the user's choice in their dialogue. The user's new choices should allow for further conversation or interaction. IMPORTANT: While the user can influence conversations, the major events, outcomes, and timeline of the story MUST strictly adhere to the biblical narrative. The core biblical events are unchangeable. Generate the next narrative segment, a vivid image prompt that includes the user's character, 2-3 new choices, and a potential bible lesson.`;
     
     fetchNextSegment(nextPrompt);
   };
@@ -125,10 +139,8 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, onExit })
             {segment.type === 'narrator' && (
               <div className="w-full bg-white rounded-2xl shadow-lg border border-stone-200/50 overflow-hidden">
                 <div className="w-full aspect-video bg-stone-200 flex items-center justify-center">
-                  {segment.isLoadingMedia ? <LoadingSpinner /> : (
-                    segment.mediaType === 'video' ?
-                    <video src={segment.mediaUrl} autoPlay loop muted playsInline className="w-full h-full object-cover" /> :
-                    <img src={segment.mediaUrl} alt="Scene" className="w-full h-full object-cover" />
+                  {segment.isLoadingImage ? <LoadingSpinner /> : (
+                    <img src={segment.imageUrl} alt="Scene" className="w-full h-full object-cover" />
                   )}
                 </div>
                 <p className="p-6 text-stone-700 leading-relaxed whitespace-pre-wrap">{segment.text}</p>
@@ -175,7 +187,7 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, onExit })
                   <button
                     key={index}
                     onClick={() => handleChoice(choice)}
-                    className="w-full text-left bg-white hover:bg-amber-100 border border-stone-300 text-stone-700 font-semibold py-3 px-4 rounded-lg transition-all duration-200 shadow-sm hover:shadow-md hover:border-amber-400"
+                    className="w-full text-left bg-white hover:bg-amber-100 border border-stone-300 text-stone-700 font-semibold py-3 px-4 rounded-lg transition-all duration-200 shadow-sm hover:shadow-md hover:border-amber-400 active:scale-[0.98]"
                   >
                     {choice}
                   </button>
@@ -195,7 +207,9 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, onExit })
                   <button
                     onClick={handleAskQuestion}
                     disabled={!question.trim() || isLoading || isAnswering}
-                    className="bg-stone-700 hover:bg-stone-600 text-white font-bold py-2 px-5 rounded-lg focus:outline-none focus:shadow-outline transition-colors duration-200 disabled:bg-stone-400"
+                    className={`bg-stone-700 hover:bg-stone-600 text-white font-bold py-2 px-5 rounded-lg focus:outline-none focus:shadow-outline transition-all duration-200 disabled:bg-stone-400 active:scale-95 ${
+                        (question.trim() && !isLoading && !isAnswering) ? 'animate-pulse-gentle' : ''
+                    }`}
                   >
                     {isAnswering ? <LoadingSpinner className="w-5 h-5" /> : 'Ask'}
                   </button>

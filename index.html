@@ -16,6 +16,19 @@
   }
 }
 </script>
+<style>
+  @keyframes pulse-gentle {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(55, 65, 81, 0.3);
+    }
+    70% {
+      box-shadow: 0 0 0 8px rgba(55, 65, 81, 0);
+    }
+  }
+  .animate-pulse-gentle {
+    animation: pulse-gentle 2s infinite;
+  }
+</style>
 </head>
 <body class="bg-amber-50 text-stone-800">
   <div id="root"></div>

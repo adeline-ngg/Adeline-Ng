@@ -21,10 +21,9 @@ export interface Story {
 export interface StorySegment {
   type: 'narrator' | 'user' | 'lesson' | 'question' | 'answer';
   text: string;
-  mediaUrl?: string;
-  mediaType?: 'image' | 'video';
+  imageUrl?: string;
   choices?: string[];
-  isLoadingMedia?: boolean;
+  isLoadingImage?: boolean;
 }
 
 export interface GeminiStoryResponse {
