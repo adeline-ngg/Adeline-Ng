@@ -1,11 +1,15 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { GeminiStoryResponse } from '../types';
 
-if (!process.env.API_KEY) {
-    throw new Error("API_KEY environment variable is not set");
-}
-
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getAI = () => {
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) {
+        console.error("⚠️ GEMINI_API_KEY not found in environment variables!");
+        console.error("Please create a .env file with: GEMINI_API_KEY=your_api_key_here");
+        throw new Error("API_KEY environment variable is not set. Please add GEMINI_API_KEY to your .env file.");
+    }
+    return new GoogleGenAI({ apiKey });
+};
 
 // FIX: `nullable: true` is not a valid schema property. The `lesson` property is made optional by removing it from the `required` array.
 const storyResponseSchema = {
@@ -27,6 +31,10 @@ const storyResponseSchema = {
         lesson: {
             type: Type.STRING,
             description: "A concise biblical lesson or moral that can be drawn from the current story segment. Null if no lesson is immediately apparent."
+        },
+        isComplete: {
+            type: Type.BOOLEAN,
+            description: "True if the core biblical narrative has reached its natural conclusion. For example: Daniel saved from lions and justice served, Moses crossed the Red Sea, David defeated Goliath, etc. Set to true when the main biblical event concludes, regardless of how many user choices have been made."
         },
     },
     required: ["narrative", "imagePrompt", "choices"],
@@ -53,6 +61,7 @@ export const generateStorySegment = async (prompt: string): Promise<GeminiStoryR
             imagePrompt: parsed.imagePrompt,
             choices: parsed.choices,
             lesson: parsed.lesson ?? null,
+            isComplete: parsed.isComplete ?? false,
         };
 
         // Ensure choices are never empty
@@ -73,7 +82,8 @@ export const generateStorySegment = async (prompt: string): Promise<GeminiStoryR
             narrative: narrative,
             imagePrompt: "A serene, empty landscape under a cloudy sky, historically accurate.",
             choices: ["Try again..."],
-            lesson: "Patience is a virtue, especially when the path is unclear."
+            lesson: "Patience is a virtue, especially when the path is unclear.",
+            isComplete: false
         };
     }
 };
@@ -128,6 +138,68 @@ export const generateSceneImage = async (prompt: string): Promise<string> => {
         console.error("Error generating scene image:", error);
         if (error instanceof Error && (error.message.includes('RESOURCE_EXHAUSTED') || error.message.includes('quota'))) {
             throw new Error("Image generation limit reached. The story will continue without a new image for this scene.");
+        }
+        throw new Error("An unexpected error occurred while generating the scene image.");
+    }
+};
+
+/**
+ * Generate a single static scene image with character consistency
+ * Accepts character descriptions to ensure consistent character appearance
+ */
+export const generateSceneImageWithCharacters = async (
+    prompt: string, 
+    characterDescriptions?: string
+): Promise<string> => {
+    const ai = getAI();
+    
+    // Reduced timeout to 60 seconds - fail faster for better UX
+    const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Image generation timeout after 60 seconds')), 60000);
+    });
+
+    try {
+        console.log('Starting image generation for prompt:', prompt.substring(0, 100) + '...');
+        const startTime = Date.now();
+        
+        // Enhance prompt with character descriptions if provided
+        const enhancedPrompt = characterDescriptions 
+            ? `Character descriptions: ${characterDescriptions}. ${prompt}, 4k, photo-realistic, historically accurate, cinematic lighting, dramatic, high-detail`
+            : `${prompt}, 4k, photo-realistic, historically accurate, cinematic lighting, dramatic, high-detail`;
+        
+        console.log('Calling Imagen API...');
+        
+        const response = await Promise.race([
+            ai.models.generateImages({
+                model: 'imagen-4.0-generate-001',
+                prompt: enhancedPrompt,
+                config: {
+                    numberOfImages: 1,
+                    outputMimeType: 'image/jpeg',
+                    aspectRatio: '16:9',
+                },
+            }),
+            timeoutPromise
+        ]);
+
+        const endTime = Date.now();
+        console.log(`Image generation completed in ${(endTime - startTime) / 1000} seconds`);
+
+        if (!response.generatedImages || response.generatedImages.length === 0) {
+            throw new Error("No image generated for scene");
+        }
+
+        return `data:image/jpeg;base64,${response.generatedImages[0].image.imageBytes}`;
+        
+    } catch (error) {
+        console.error("Error generating scene image:", error);
+        if (error instanceof Error) {
+            if (error.message.includes('RESOURCE_EXHAUSTED') || error.message.includes('quota')) {
+                throw new Error("Image generation limit reached. The story will continue without an image for this scene.");
+            }
+            if (error.message.includes('timeout')) {
+                throw new Error("Image generation timed out. The story will continue with a placeholder image.");
+            }
         }
         throw new Error("An unexpected error occurred while generating the scene image.");
     }

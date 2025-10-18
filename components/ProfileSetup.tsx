@@ -1,19 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserProfile } from '../types';
 import ChevronRightIcon from './icons/ChevronRightIcon';
 import { generateAvatarImage } from '../services/geminiService';
+import { loadProfile, saveProfile } from '../services/storageService';
 import LoadingSpinner from './LoadingSpinner';
 
 interface ProfileSetupProps {
   onProfileCreate: (profile: UserProfile) => void;
+  isEditMode?: boolean;
+  onProfileUpdate?: (profile: UserProfile) => void;
 }
 
-const ProfileSetup: React.FC<ProfileSetupProps> = ({ onProfileCreate }) => {
+const ProfileSetup: React.FC<ProfileSetupProps> = ({ onProfileCreate, isEditMode = false, onProfileUpdate }) => {
   const [name, setName] = useState('');
   const [avatarDescription, setAvatarDescription] = useState('A young shepherd with kind eyes');
   const [generatedAvatarUrl, setGeneratedAvatarUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+
+  // Load existing profile on mount
+  useEffect(() => {
+    const existingProfile = loadProfile();
+    if (existingProfile) {
+      setName(existingProfile.name);
+      setAvatarDescription(existingProfile.description);
+      setGeneratedAvatarUrl(existingProfile.avatarUrl);
+    }
+  }, []);
 
   const handleGenerateAvatar = async () => {
     if (!avatarDescription.trim() || isGenerating) return;
@@ -38,7 +51,20 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ onProfileCreate }) => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (name.trim() && generatedAvatarUrl) {
-      onProfileCreate({ name: name.trim(), avatarUrl: generatedAvatarUrl, description: avatarDescription });
+      const profile: UserProfile = { 
+        name: name.trim(), 
+        avatarUrl: generatedAvatarUrl, 
+        description: avatarDescription 
+      };
+      
+      // Save profile to localStorage
+      saveProfile(profile);
+      
+      if (isEditMode && onProfileUpdate) {
+        onProfileUpdate(profile);
+      } else {
+        onProfileCreate(profile);
+      }
     }
   };
 
@@ -46,7 +72,9 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ onProfileCreate }) => {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-100 to-orange-200 p-4">
       <div className="w-full max-w-md bg-white/50 backdrop-blur-sm rounded-2xl shadow-2xl p-8 border border-white/30">
         <h1 className="text-4xl font-bold text-stone-800 text-center mb-2 font-serif">Biblical Journeys</h1>
-        <p className="text-center text-stone-600 mb-8">Create your profile to begin your adventure.</p>
+        <p className="text-center text-stone-600 mb-8">
+          {isEditMode ? 'Edit your profile details.' : 'Create your profile to begin your adventure.'}
+        </p>
         
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
@@ -111,7 +139,7 @@ const ProfileSetup: React.FC<ProfileSetupProps> = ({ onProfileCreate }) => {
             disabled={!name.trim() || !generatedAvatarUrl || isGenerating}
             className="w-full bg-stone-800 hover:bg-stone-700 text-white font-bold py-3 px-4 rounded-lg focus:outline-none focus:shadow-outline transition-transform duration-200 ease-in-out disabled:bg-stone-400 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
-            Begin Journey <ChevronRightIcon />
+{isEditMode ? 'Update Profile' : 'Begin Journey'} <ChevronRightIcon />
           </button>
         </form>
       </div>
