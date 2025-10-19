@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { GeminiStoryResponse } from '../types';
+import { falService } from './falService';
 
 const getAI = () => {
     const apiKey = import.meta.env.VITE_GEMINI_KEY || import.meta.env.VITE_GEMINI_API_KEY || import.meta.env.VITE_API_KEY;
@@ -41,6 +42,10 @@ const storyResponseSchema = {
             type: Type.STRING,
             description: "The current location or setting where this scene takes place. This helps maintain visual consistency across images. Examples: 'palace', 'lions den', 'valley of elah', 'red sea shore', etc."
         },
+        isImportantScene: {
+            type: Type.BOOLEAN,
+            description: "True if this is a major plot point deserving of animated visualization (e.g., parting of Red Sea, David vs Goliath confrontation, Jesus's resurrection). Reserve for truly pivotal moments, approximately 20-30% of segments."
+        },
     },
     required: ["narrative", "imagePrompt", "choices"],
 };
@@ -68,6 +73,7 @@ export const generateStorySegment = async (prompt: string): Promise<GeminiStoryR
             lessons: parsed.lessons ?? [],
             isComplete: parsed.isComplete ?? false,
             location: parsed.location ?? null,
+            isImportantScene: parsed.isImportantScene ?? false,
         };
 
         // Ensure choices are never empty
@@ -277,7 +283,7 @@ export const generateAvatarImage = async (prompt: string): Promise<string> => {
         
         throw new Error("No image generated for avatar");
     } catch (error) {
-        console.error("Error generating avatar image:", error);
+        console.error("Error generating avatar image with Gemini:", error);
         console.error("Error details:", JSON.stringify(error, null, 2));
         
         if (error instanceof Error) {
@@ -285,9 +291,24 @@ export const generateAvatarImage = async (prompt: string): Promise<string> => {
             console.error("Error message:", error.message);
             console.error("Error stack:", error.stack);
             
-            // Check for specific error types
+            // Check for specific error types that should trigger FAL fallback
             if (error.message.includes('RESOURCE_EXHAUSTED') || error.message.includes('quota')) {
-                throw new Error("You have exceeded your request limit for image generation. Please check your API key's plan and billing details, or try again later.");
+                console.log("Gemini quota exceeded, attempting FAL fallback...");
+                
+                // Try FAL as fallback if configured
+                if (falService.isConfigured()) {
+                    try {
+                        console.log("Using FAL.ai as fallback for avatar generation");
+                        const falAvatar = await falService.generateAvatarImage(prompt);
+                        console.log("FAL fallback successful");
+                        return falAvatar;
+                    } catch (falError) {
+                        console.error("FAL fallback also failed:", falError);
+                        throw new Error("You have exceeded your request limit for image generation. Please check your API key's plan and billing details, or try again later.");
+                    }
+                } else {
+                    throw new Error("You have exceeded your request limit for image generation. Please check your API key's plan and billing details, or try again later.");
+                }
             } else if (error.message.includes('PERMISSION_DENIED') || error.message.includes('403')) {
                 throw new Error("Image generation API access denied. Please check your API key permissions and billing.");
             } else if (error.message.includes('INVALID_ARGUMENT') || error.message.includes('400')) {
