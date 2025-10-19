@@ -5,6 +5,7 @@ import StorySelect from './components/StorySelect';
 import StoryPlayer from './components/StoryPlayer';
 import LessonsSummary from './components/LessonsSummary';
 import TutorialGuide from './components/TutorialGuide';
+import ErrorBoundary from './components/ErrorBoundary';
 import { loadProfile, hasProfile, migrateLessonFormat } from './services/storageService';
 import { initializeMemory } from './services/memoryService';
 import { tutorialService } from './services/tutorialService';
@@ -21,7 +22,12 @@ const App: React.FC = () => {
   // Check for saved profile on mount
   useEffect(() => {
     // Initialize Mem0 (optional, will gracefully degrade if not configured)
-    initializeMemory().catch(console.error);
+    // Run this asynchronously without blocking the app
+    setTimeout(() => {
+      initializeMemory().catch((error) => {
+        console.warn('Memory service initialization failed (this is optional):', error);
+      });
+    }, 0);
 
     // Run data migration for lesson format
     migrateLessonFormat();
@@ -134,18 +140,20 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="App">
-      {renderContent()}
-      
-      {/* Tutorial Guide Modal */}
-      {showTutorial && (
-        <TutorialGuide
-          isOpen={showTutorial}
-          onClose={() => setShowTutorial(false)}
-          onComplete={handleTutorialComplete}
-        />
-      )}
-    </div>
+    <ErrorBoundary>
+      <div className="App">
+        {renderContent()}
+        
+        {/* Tutorial Guide Modal */}
+        {showTutorial && (
+          <TutorialGuide
+            isOpen={showTutorial}
+            onClose={() => setShowTutorial(false)}
+            onComplete={handleTutorialComplete}
+          />
+        )}
+      </div>
+    </ErrorBoundary>
   );
 };
 

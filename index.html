@@ -8,17 +8,27 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500;1,600;1,700&family=Crimson+Text:ital,wght@0,400;0,600;0,700;1,400;1,600;1,700&display=swap" rel="stylesheet">
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Tailwind CSS CDN - Development only -->
   <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: {
-            'script': ['Cormorant Garamond', 'serif'],
-            'serif': ['Crimson Text', 'serif'],
+    // Only load Tailwind CDN in development
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.tailwindcss.com';
+      script.onload = function() {
+        tailwind.config = {
+          theme: {
+            extend: {
+              fontFamily: {
+                'script': ['Cormorant Garamond', 'serif'],
+                'serif': ['Crimson Text', 'serif'],
+              }
+            }
           }
-        }
-      }
+        };
+      };
+      document.head.appendChild(script);
+    } else {
+      console.warn('Tailwind CSS CDN should not be used in production. Please install Tailwind CSS as a PostCSS plugin.');
     }
   </script>
 <script type="importmap">

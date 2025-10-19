@@ -1,4 +1,4 @@
-import { UserProfile, SavedProfile, StoryProgress, SavedProgress, AppSettings, NarrationSettings, ElevenLabsSettings, SpeechifySettings, StoryLesson, TutorialCompletion } from '../types';
+import { UserProfile, SavedProfile, StoryProgress, SavedProgress, AppSettings, NarrationSettings, ElevenLabsSettings, SpeechifySettings, FalSettings, StoryLesson, TutorialCompletion } from '../types';
 import { getDefaultNarrationSettings } from './speechService';
 import { elevenLabsService } from './elevenLabsService';
 import { speechifyService } from './speechifyService';
@@ -66,7 +66,34 @@ export function saveStoryProgress(storyId: string, progress: Omit<StoryProgress,
     };
     
     allProgress[storyId] = storyProgress;
-    localStorage.setItem(PROGRESS_KEY, JSON.stringify(allProgress));
+    
+    // Try to save the full progress data
+    const progressData = JSON.stringify(allProgress);
+    
+    try {
+      localStorage.setItem(PROGRESS_KEY, progressData);
+    } catch (quotaError) {
+      if (quotaError instanceof DOMException && quotaError.name === 'QuotaExceededError') {
+        console.warn('Storage quota exceeded, attempting to compress data...');
+        
+        // Try to save with compressed data
+        const compressedData = compressProgressData(allProgress);
+        try {
+          localStorage.setItem(PROGRESS_KEY, compressedData);
+          console.log('Successfully saved compressed progress data');
+        } catch (compressedError) {
+          console.error('Even compressed data exceeds quota, cleaning up old data...');
+          
+          // Clean up old data and try again
+          const cleanedData = cleanupOldProgressData(allProgress);
+          const cleanedCompressed = compressProgressData(cleanedData);
+          localStorage.setItem(PROGRESS_KEY, cleanedCompressed);
+          console.log('Successfully saved after cleanup');
+        }
+      } else {
+        throw quotaError;
+      }
+    }
   } catch (error) {
     console.error('Error saving story progress:', error);
     // Don't throw - progress save failures shouldn't break the app
@@ -88,7 +115,14 @@ export function loadAllProgress(): SavedProgress {
     const saved = localStorage.getItem(PROGRESS_KEY);
     if (!saved) return {};
     
-    return JSON.parse(saved);
+    // Try to parse as regular JSON first
+    try {
+      return JSON.parse(saved);
+    } catch (parseError) {
+      // If parsing fails, try to decompress
+      console.log('Attempting to decompress progress data...');
+      return decompressProgressData(saved);
+    }
   } catch (error) {
     console.error('Error loading all progress:', error);
     return {};
@@ -115,7 +149,7 @@ export function deleteAllProgress(): void {
 
 export function hasStoryProgress(storyId: string): boolean {
   const progress = loadStoryProgress(storyId);
-  return progress !== null && progress.segments.length > 0;
+  return progress !== null && progress.segments && progress.segments.length > 0;
 }
 
 export function isStoryCompleted(storyId: string): boolean {
@@ -167,6 +201,10 @@ export function loadSettings(): AppSettings {
         ...getDefaultSettings().speechify,
         ...settings.speechify,
       },
+      fal: {
+        ...getDefaultSettings().fal,
+        ...settings.fal,
+      },
     };
     
     console.log('Storage: Merged settings:', mergedSettings);
@@ -207,11 +245,28 @@ export function loadSpeechifySettings(): SpeechifySettings {
   return settings.speechify;
 }
 
+export function saveFalSettings(fal: FalSettings): void {
+  const settings = loadSettings();
+  settings.fal = fal;
+  saveSettings(settings);
+}
+
+export function loadFalSettings(): FalSettings {
+  const settings = loadSettings();
+  return settings.fal;
+}
+
 function getDefaultSettings(): AppSettings {
   return {
     narration: getDefaultNarrationSettings(),
     elevenLabs: elevenLabsService.getDefaultSettings(),
     speechify: speechifyService.getDefaultSettings(),
+    fal: {
+      enabled: false, // Disabled by default for cost control - user can enable in Settings
+      sessionLimit: 10,
+      currentSessionCount: 0,
+      useFalFallback: true, // Enabled by default - user can disable if concerned about costs
+    },
   };
 }
 
@@ -233,6 +288,8 @@ export function getStorageInfo(): {
   hasProfile: boolean;
   storiesWithProgress: string[];
   estimatedSize: string;
+  quotaUsed: string;
+  quotaAvailable: string;
 } {
   const hasProf = hasProfile();
   const allProgress = loadAllProgress();
@@ -253,11 +310,39 @@ export function getStorageInfo(): {
   // Convert to KB
   const sizeInKB = (totalSize / 1024).toFixed(2);
   
+  // Estimate quota usage (localStorage is typically 5-10MB)
+  const estimatedQuota = 5 * 1024 * 1024; // 5MB in bytes
+  const quotaUsedPercent = ((totalSize / estimatedQuota) * 100).toFixed(1);
+  const quotaAvailable = Math.max(0, estimatedQuota - totalSize);
+  const quotaAvailableKB = (quotaAvailable / 1024).toFixed(2);
+  
   return {
     hasProfile: hasProf,
     storiesWithProgress: storyIds,
     estimatedSize: `${sizeInKB} KB`,
+    quotaUsed: `${quotaUsedPercent}%`,
+    quotaAvailable: `${quotaAvailableKB} KB`,
   };
+}
+
+// Check if storage is approaching quota limit
+export function isStorageNearQuota(): boolean {
+  const info = getStorageInfo();
+  const quotaUsedPercent = parseFloat(info.quotaUsed);
+  return quotaUsedPercent > 80; // Warn when 80% of estimated quota is used
+}
+
+// Force cleanup of old data when storage is full
+export function forceCleanupStorage(): void {
+  try {
+    const allProgress = loadAllProgress();
+    const cleanedData = cleanupOldProgressData(allProgress);
+    const compressedData = compressProgressData(cleanedData);
+    localStorage.setItem(PROGRESS_KEY, compressedData);
+    console.log('Storage cleanup completed successfully');
+  } catch (error) {
+    console.error('Error during storage cleanup:', error);
+  }
 }
 
 /**
@@ -326,6 +411,105 @@ export function loadTutorialCompletion(): TutorialCompletion {
       skippedTutorial: false,
     };
   }
+}
+
+/**
+ * Data Compression and Cleanup Functions
+ */
+
+// Simple compression by removing unnecessary whitespace and shortening keys
+function compressProgressData(progressData: SavedProgress): string {
+  const compressed = Object.entries(progressData).reduce((acc, [storyId, progress]) => {
+    // Remove unnecessary fields and compress text content
+    const compressedProgress = {
+      s: progress.segments?.map(segment => ({
+        t: segment.type,
+        txt: segment.text,
+        img: segment.imageUrl,
+        gif: segment.gifUrl,
+        // Remove loading states as they're not needed in storage
+      })) || [],
+      c: progress.currentChoices || [],
+      h: progress.storyHistory?.slice(-50) || [], // Keep only last 50 history entries
+      u: progress.userChoiceCount || 0,
+      comp: progress.isCompleted || false,
+      env: progress.currentEnvironment || '',
+      cd: progress.completionDate,
+      lu: progress.lastUpdated
+    };
+    
+    acc[storyId] = compressedProgress;
+    return acc;
+  }, {} as any);
+  
+  return JSON.stringify(compressed);
+}
+
+// Decompress data back to original format
+function decompressProgressData(compressedData: string): SavedProgress {
+  try {
+    const compressed = JSON.parse(compressedData);
+    const decompressed = Object.entries(compressed).reduce((acc, [storyId, progress]: [string, any]) => {
+      const decompressedProgress: StoryProgress = {
+        storyId,
+        segments: progress.s?.map((segment: any) => ({
+          type: segment.t,
+          text: segment.txt,
+          imageUrl: segment.img,
+          gifUrl: segment.gif,
+          isLoadingImage: false, // Always false when loaded from storage
+          isLoadingGif: false,
+        })) || [],
+        currentChoices: progress.c || [],
+        storyHistory: progress.h || [],
+        userChoiceCount: progress.u || 0,
+        isCompleted: progress.comp || false,
+        currentEnvironment: progress.env || '',
+        completionDate: progress.cd,
+        lastUpdated: progress.lu || Date.now()
+      };
+      
+      acc[storyId] = decompressedProgress;
+      return acc;
+    }, {} as SavedProgress);
+    
+    return decompressed;
+  } catch (error) {
+    console.error('Error decompressing progress data:', error);
+    return {};
+  }
+}
+
+// Clean up old data to free up space
+function cleanupOldProgressData(progressData: SavedProgress): SavedProgress {
+  const cleaned = Object.entries(progressData).reduce((acc, [storyId, progress]) => {
+    // Keep only essential data for completed stories
+    if (progress.isCompleted) {
+      const cleanedProgress: StoryProgress = {
+        ...progress,
+        // Keep only the last 20 segments for completed stories
+        segments: progress.segments?.slice(-20) || [],
+        // Keep only the last 20 history entries
+        storyHistory: progress.storyHistory?.slice(-20) || [],
+        // Remove current choices for completed stories
+        currentChoices: [],
+      };
+      acc[storyId] = cleanedProgress;
+    } else {
+      // For incomplete stories, keep more data but still clean up
+      const cleanedProgress: StoryProgress = {
+        ...progress,
+        // Keep only the last 30 segments for incomplete stories
+        segments: progress.segments?.slice(-30) || [],
+        // Keep only the last 30 history entries
+        storyHistory: progress.storyHistory?.slice(-30) || [],
+      };
+      acc[storyId] = cleanedProgress;
+    }
+    return acc;
+  }, {} as SavedProgress);
+  
+  return cleaned;
 }
 
 /**

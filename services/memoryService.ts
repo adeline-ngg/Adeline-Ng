@@ -25,12 +25,48 @@ export async function initializeMemory(apiKey?: string): Promise<boolean> {
       return false;
     }
 
+    // Check if we're running in a browser environment
+    if (typeof window === 'undefined') {
+      console.info('Not running in browser environment. Memory features will be disabled.');
+      return false;
+    }
+
     // Dynamically import mem0ai to avoid issues if not configured
     const { MemoryClient } = await import('mem0ai');
-    memoryClient = new MemoryClient({ apiKey: key });
-    isInitialized = true;
-    console.log('Mem0 memory service initialized');
-    return true;
+    
+    // Create client with error handling for the constructor
+    try {
+      memoryClient = new MemoryClient({ apiKey: key });
+    } catch (constructorError) {
+      console.warn('Mem0 client constructor failed:', constructorError);
+      memoryClient = null;
+      isInitialized = false;
+      return false;
+    }
+    
+    // Test the client with a simple ping operation
+    // Use a timeout to prevent hanging
+    try {
+      const pingPromise = memoryClient.ping();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Ping timeout')), 5000)
+      );
+      
+      await Promise.race([pingPromise, timeoutPromise]);
+      isInitialized = true;
+      console.log('Mem0 memory service initialized');
+      return true;
+    } catch (pingError) {
+      console.warn('Mem0 client ping failed:', pingError);
+      // Check if it's a CORS error and provide helpful message
+      const errorMessage = pingError instanceof Error ? pingError.message : String(pingError);
+      if (errorMessage.includes('CORS') || errorMessage.includes('Failed to fetch')) {
+        console.info('Mem0 API is not accessible due to CORS policy. Memory features will be disabled. This is normal for local development.');
+      }
+      memoryClient = null;
+      isInitialized = false;
+      return false;
+    }
   } catch (error) {
     // Check for CORS or network-related errors
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -38,8 +74,9 @@ export async function initializeMemory(apiKey?: string): Promise<boolean> {
     if (errorMessage.includes('CORS') || 
         errorMessage.includes('Failed to fetch') || 
         errorMessage.includes('net::ERR_FAILED') ||
-        errorMessage.includes('blocked by CORS policy')) {
-      console.info('Mem0 API is not accessible from browser (CORS restrictions). Memory features will be disabled (this is optional).');
+        errorMessage.includes('blocked by CORS policy') ||
+        errorMessage.includes('Ping timeout')) {
+      console.info('Mem0 API is not accessible from browser (CORS restrictions or timeout). Memory features will be disabled (this is optional).');
     } else if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
       console.warn('Invalid Mem0 API key. Memory features will be disabled.');
     } else if (errorMessage.includes('403') || errorMessage.includes('Forbidden')) {
