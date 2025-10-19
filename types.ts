@@ -31,8 +31,11 @@ export interface StorySegment {
   type: 'narrator' | 'user' | 'lesson' | 'question' | 'answer';
   text: string;
   imageUrl?: string;
-  choices?: string[];
+  gifUrl?: string; // New field for animated GIF
   isLoadingImage?: boolean;
+  isLoadingGif?: boolean; // New field for loading state
+  isImportantScene?: boolean; // Flag from AI to determine GIF generation
+  choices?: string[];
 }
 
 export interface GeminiStoryResponse {
@@ -43,6 +46,7 @@ export interface GeminiStoryResponse {
     isComplete?: boolean;
     isFallback?: boolean;  // Add this field
     location?: string | null;  // Add location field
+    isImportantScene?: boolean; // New field for AI to flag major plot points
 }
 
 // Narration and Audio Types
@@ -68,6 +72,14 @@ export interface SpeechifySettings {
   apiKey?: string;
 }
 
+export interface FalSettings {
+  enabled: boolean;
+  sessionLimit: number; // Max GIFs per session
+  currentSessionCount: number;
+  useFalFallback: boolean; // Use fal.ai as fallback when Gemini Imagen fails
+  apiKey?: string; // Stored in environment variable
+}
+
 export interface SpeechifyVoice {
   id: string;
   name: string;
@@ -82,6 +94,15 @@ export interface AudioCacheEntry {
   speed: number;
   timestamp: number;
   provider: 'webspeech' | 'elevenlabs' | 'speechify';
+}
+
+export interface MediaCacheEntry {
+  prompt: string;
+  mediaBlob: Blob;
+  model: string;
+  duration: number;
+  timestamp: number;
+  mediaType: 'gif' | 'video' | 'image';
 }
 
 // Storage and Save State Types
@@ -110,6 +131,7 @@ export interface AppSettings {
   narration: NarrationSettings;
   elevenLabs: ElevenLabsSettings;
   speechify: SpeechifySettings;
+  fal: FalSettings;
 }
 
 // Mem0 Memory Types

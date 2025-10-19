@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { NarrationSettings, UserProfile, ElevenLabsSettings, SpeechifySettings } from '../types';
+import { NarrationSettings, UserProfile, ElevenLabsSettings, SpeechifySettings, FalSettings } from '../types';
 import { speechService } from '../services/speechService';
 import { elevenLabsService } from '../services/elevenLabsService';
 import { speechifyService } from '../services/speechifyService';
+import { falService } from '../services/falService';
 import { 
   loadSettings, 
   saveNarrationSettings, 
@@ -10,6 +11,8 @@ import {
   loadElevenLabsSettings,
   saveSpeechifySettings,
   loadSpeechifySettings,
+  saveFalSettings,
+  loadFalSettings,
   deleteAllProgress, 
   deleteProfile,
   getStorageInfo,
@@ -40,9 +43,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onProfileDeleted, onProfil
   });
   const [elevenLabs, setElevenLabs] = useState<ElevenLabsSettings>(loadElevenLabsSettings());
   const [speechify, setSpeechify] = useState<SpeechifySettings>(loadSpeechifySettings());
+  const [fal, setFal] = useState<FalSettings>(loadFalSettings());
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [storageInfo, setStorageInfo] = useState(getStorageInfo());
   const [cacheInfo, setCacheInfo] = useState({ entryCount: 0, oldestEntry: null, newestEntry: null });
+  const [mediaCacheInfo, setMediaCacheInfo] = useState({ entryCount: 0, oldestEntry: null, newestEntry: null, totalSizeEstimate: 0 });
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<'progress' | 'profile' | null>(null);
   const [showEditProfile, setShowEditProfile] = useState(false);
   const [showEditWarning, setShowEditWarning] = useState(false);
@@ -50,6 +55,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onProfileDeleted, onProfil
   const [showSpeechifyApiKey, setShowSpeechifyApiKey] = useState(false);
   const [testVoiceLoading, setTestVoiceLoading] = useState(false);
   const [testSpeechifyVoiceLoading, setTestSpeechifyVoiceLoading] = useState(false);
+  const [testGifLoading, setTestGifLoading] = useState(false);
 
   useEffect(() => {
     // Load available voices
@@ -80,6 +86,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onProfileDeleted, onProfil
 
     // Load cache stats
     getCacheStats().then(setCacheInfo);
+    falService.getMediaCacheStats().then(setMediaCacheInfo);
   }, []);
 
 
@@ -217,6 +224,105 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onProfileDeleted, onProfil
     }
   };
 
+  // FAL.ai handlers
+  const handleFalToggle = () => {
+    const updated = { ...fal, enabled: !fal.enabled };
+    setFal(updated);
+    saveFalSettings(updated);
+  };
+
+  const handleFalFallbackToggle = () => {
+    const updated = { ...fal, useFalFallback: !fal.useFalFallback };
+    setFal(updated);
+    saveFalSettings(updated);
+  };
+
+  const handleSessionLimitChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const sessionLimit = parseInt(event.target.value);
+    if (sessionLimit >= 1 && sessionLimit <= 50) {
+      const updated = { ...fal, sessionLimit };
+      setFal(updated);
+      saveFalSettings(updated);
+    }
+  };
+
+  const handleResetFalCounter = () => {
+    const updated = { ...fal, currentSessionCount: 0 };
+    setFal(updated);
+    saveFalSettings(updated);
+  };
+
+  const handleTestGifGeneration = async () => {
+    if (!falService.isConfigured()) {
+      alert('Please configure your FAL.ai API key first.');
+      return;
+    }
+
+    setTestGifLoading(true);
+    try {
+      const testPrompt = "A peaceful biblical scene with gentle movement";
+      const gifDataUrl = await falService.generateGIF(testPrompt, 5);
+      
+      // Create a temporary video element to test the GIF
+      const video = document.createElement('video');
+      video.src = gifDataUrl;
+      video.controls = true;
+      video.style.maxWidth = '100%';
+      video.style.height = 'auto';
+      
+      // Create a modal to display the test GIF
+      const modal = document.createElement('div');
+      modal.style.position = 'fixed';
+      modal.style.top = '0';
+      modal.style.left = '0';
+      modal.style.width = '100%';
+      modal.style.height = '100%';
+      modal.style.backgroundColor = 'rgba(0,0,0,0.8)';
+      modal.style.display = 'flex';
+      modal.style.alignItems = 'center';
+      modal.style.justifyContent = 'center';
+      modal.style.zIndex = '9999';
+      
+      const content = document.createElement('div');
+      content.style.backgroundColor = 'white';
+      content.style.padding = '20px';
+      content.style.borderRadius = '8px';
+      content.style.maxWidth = '80%';
+      content.style.maxHeight = '80%';
+      
+      const title = document.createElement('h3');
+      title.textContent = 'Test GIF Generation';
+      title.style.marginBottom = '10px';
+      
+      const closeBtn = document.createElement('button');
+      closeBtn.textContent = 'Close';
+      closeBtn.style.marginTop = '10px';
+      closeBtn.style.padding = '8px 16px';
+      closeBtn.style.backgroundColor = '#ef4444';
+      closeBtn.style.color = 'white';
+      closeBtn.style.border = 'none';
+      closeBtn.style.borderRadius = '4px';
+      closeBtn.style.cursor = 'pointer';
+      
+      closeBtn.onclick = () => {
+        document.body.removeChild(modal);
+      };
+      
+      content.appendChild(title);
+      content.appendChild(video);
+      content.appendChild(closeBtn);
+      modal.appendChild(content);
+      document.body.appendChild(modal);
+      
+      console.log('Test GIF generated successfully');
+    } catch (error) {
+      console.error('Error testing GIF generation:', error);
+      alert(`Failed to generate test GIF: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setTestGifLoading(false);
+    }
+  };
+
   const handleClearProgress = () => {
     deleteAllProgress();
     setStorageInfo(getStorageInfo());
@@ -237,6 +343,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onProfileDeleted, onProfil
     await clearAudioCache();
     const stats = await getCacheStats();
     setCacheInfo(stats);
+  };
+
+  const handleClearMediaCache = async () => {
+    await falService.clearMediaCache();
+    const stats = await falService.getMediaCacheStats();
+    setMediaCacheInfo(stats);
   };
 
   const handleEditProfile = () => {
@@ -587,6 +699,142 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onProfileDeleted, onProfil
                   </button>
                 </>
               )}
+            </div>
+          </section>
+
+          {/* FAL.ai GIF Settings */}
+          <section className="border-t border-stone-200 pt-6">
+            <h3 className="text-lg font-bold text-stone-800 font-script mb-4">Animated Scenes (FAL.ai)</h3>
+            
+            <div className={`p-3 rounded-lg mb-4 ${falService.isConfigured() ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'}`}>
+              <p className={`text-sm ${falService.isConfigured() ? 'text-green-800' : 'text-amber-800'}`}>
+                {falService.isConfigured() 
+                  ? `✓ FAL.ai configured | GIFs this session: ${fal.currentSessionCount}/${fal.sessionLimit}` 
+                  : '⚠ FAL.ai not configured. Set VITE_FAL_API_KEY in environment to enable animated scenes.'}
+              </p>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <label className="text-stone-700 font-semibold">Enable Animated Scenes</label>
+                <button
+                  onClick={handleFalToggle}
+                  disabled={!falService.isConfigured()}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                    fal.enabled ? 'bg-amber-500' : 'bg-stone-300'
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    fal.enabled ? 'translate-x-6' : 'translate-x-1'
+                  }`} />
+                </button>
+              </div>
+              
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <label className="text-stone-700 font-semibold">Use FAL.ai as Fallback</label>
+                  <p className="text-xs text-stone-500 mt-1">
+                    When Gemini Imagen fails, automatically try FAL.ai for both static images and GIFs
+                  </p>
+                </div>
+                <button
+                  onClick={handleFalFallbackToggle}
+                  disabled={!falService.isConfigured()}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ml-4 ${
+                    fal.useFalFallback ? 'bg-amber-500' : 'bg-stone-300'
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    fal.useFalFallback ? 'translate-x-6' : 'translate-x-1'
+                  }`} />
+                </button>
+              </div>
+              
+              <div>
+                <label className="block text-stone-700 font-semibold mb-2">GIFs Per Session Limit</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={fal.sessionLimit}
+                  onChange={handleSessionLimitChange}
+                  disabled={!fal.enabled}
+                  className="w-full border border-stone-300 rounded-lg px-4 py-2 text-stone-700 focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-stone-100"
+                />
+                <p className="text-xs text-stone-500 mt-1">
+                  Limits cost by capping GIF generation. Resets when you reload the app.
+                </p>
+              </div>
+              
+              <button
+                onClick={handleResetFalCounter}
+                disabled={fal.currentSessionCount === 0}
+                className="w-full bg-stone-600 hover:bg-stone-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors disabled:bg-stone-300 disabled:cursor-not-allowed"
+              >
+                Reset Session Counter ({fal.currentSessionCount} used)
+              </button>
+              
+              <button
+                onClick={handleTestGifGeneration}
+                disabled={!falService.isConfigured() || testGifLoading}
+                className="w-full bg-amber-500 hover:bg-amber-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors disabled:bg-stone-300 disabled:cursor-not-allowed"
+              >
+                {testGifLoading ? 'Generating Test GIF...' : 'Test GIF Generation'}
+              </button>
+            </div>
+          </section>
+
+          {/* Media Cache Management */}
+          <section className="border-t border-stone-200 pt-6">
+            <h3 className="text-lg font-bold text-stone-800 font-script mb-4">Media Cache</h3>
+            
+            <div className="bg-stone-50 rounded-lg p-4 space-y-3">
+              <div className="text-sm text-stone-600 mb-3">
+                <p className="mb-2">Cached GIFs and images are stored locally to reduce API costs and improve loading speed.</p>
+                <p className="text-xs">Cache expires after 30 days and is limited to 50 entries.</p>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-stone-600">Cached items:</span>
+                  <span className="font-semibold text-stone-800">{mediaCacheInfo.entryCount}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-stone-600">Total size:</span>
+                  <span className="font-semibold text-stone-800">
+                    {mediaCacheInfo.totalSizeEstimate > 0 
+                      ? `${Math.round(mediaCacheInfo.totalSizeEstimate / 1024 / 1024 * 100) / 100} MB`
+                      : '0 MB'
+                    }
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-stone-600">Oldest entry:</span>
+                  <span className="font-semibold text-stone-800">
+                    {mediaCacheInfo.oldestEntry 
+                      ? new Date(mediaCacheInfo.oldestEntry).toLocaleDateString()
+                      : 'None'
+                    }
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-stone-600">Newest entry:</span>
+                  <span className="font-semibold text-stone-800">
+                    {mediaCacheInfo.newestEntry 
+                      ? new Date(mediaCacheInfo.newestEntry).toLocaleDateString()
+                      : 'None'
+                    }
+                  </span>
+                </div>
+              </div>
+              
+              <button
+                onClick={handleClearMediaCache}
+                disabled={mediaCacheInfo.entryCount === 0}
+                className="w-full bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors disabled:bg-stone-300 disabled:cursor-not-allowed"
+              >
+                Clear Media Cache ({mediaCacheInfo.entryCount} items)
+              </button>
             </div>
           </section>
 

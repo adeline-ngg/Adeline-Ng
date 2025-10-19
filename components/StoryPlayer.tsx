@@ -4,7 +4,8 @@ import { generateStorySegment, generateSceneImageWithCharacters, generateClarifi
 import { speechService } from '../services/speechService';
 import { elevenLabsService, QuotaExceededError } from '../services/elevenLabsService';
 import { speechifyService } from '../services/speechifyService';
-import { loadSettings, saveStoryProgress, loadStoryProgress, loadElevenLabsSettings, loadSpeechifySettings } from '../services/storageService';
+import { falService, QuotaExceededError as FalQuotaExceededError, TimeoutError as FalTimeoutError, FalConfigurationError } from '../services/falService';
+import { loadSettings, saveStoryProgress, loadStoryProgress, loadElevenLabsSettings, loadSpeechifySettings, loadFalSettings, saveFalSettings, isStorageNearQuota, forceCleanupStorage } from '../services/storageService';
 import { trackChoice, isMemoryAvailable } from '../services/memoryService';
 import { formatNarrative, addDropCap, NARRATIVE_TYPOGRAPHY, HEADER_TYPOGRAPHY } from '../utils/textFormatting';
 import { getCachedAudioBlob, cacheAudioBlob } from '../utils/audioCache';
@@ -64,6 +65,10 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
   const [expandedLessons, setExpandedLessons] = useState<Set<string>>(new Set());
   const [lessonTitles, setLessonTitles] = useState<Map<string, string>>(new Map());
   const [lessonTitlesLoading, setLessonTitlesLoading] = useState<Set<string>>(new Set());
+  const [showStorageWarning, setShowStorageWarning] = useState(false);
+  const [gifError, setGifError] = useState<string | null>(null);
+  const [fallbackNotification, setFallbackNotification] = useState<string | null>(null);
+  const [gifGeneratedCount, setGifGeneratedCount] = useState(0); // Track GIFs generated per story
   const storyHistory = useRef<string[]>([]);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
   const isGeneratingRef = useRef(false); // Prevent concurrent API calls
@@ -137,8 +142,11 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
     }, 300); // Increased delay to ensure DOM is fully rendered
   };
 
-  // Calculate progress percentage based on user choice count
-  const calculateProgress = (choiceCount: number): number => {
+  // Calculate progress percentage based on user choice count and completion status
+  const calculateProgress = (choiceCount: number, isCompleted: boolean): number => {
+    // If story is completed, show 100%
+    if (isCompleted) return 100;
+    
     // More gradual progression that allows for variable story lengths
     if (choiceCount <= 3) return Math.round((choiceCount / 3) * 30);
     if (choiceCount <= 8) return Math.round(30 + ((choiceCount - 3) / 5) * 40);
@@ -146,7 +154,9 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
     return 95; // Cap at 95% until AI marks story complete
   };
 
-  const progressPercentage = calculateProgress(userChoiceCount);
+  // Check if story is completed by looking at the latest segments or showCompletionModal state
+  const isStoryCompleted = showCompletionModal || segments.some(segment => segment.type === 'narrator' && segment.text.toLowerCase().includes('story is complete'));
+  const progressPercentage = calculateProgress(userChoiceCount, isStoryCompleted);
 
   // Generate character descriptions for consistency across all story images
   const generateCharacterDescriptions = useCallback((userProfile: UserProfile, storyContext: string): string => {
@@ -224,6 +234,8 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
     // Handle replay mode - load completed story segments
     if (isReplayMode) {
       const progress = loadStoryProgress(story.id);
+      console.log('Replay mode - loading progress:', progress);
+      
       if (progress && progress.isCompleted) {
         // Clean segments for replay mode - ensure no loading states and all images are present
         const cleanedSegments = progress.segments.map(segment => {
@@ -231,6 +243,7 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
             return {
               ...segment,
               isLoadingImage: false,
+              isLoadingGif: false,
               // Ensure there's always an image, use fallback if none exists
               imageUrl: segment.imageUrl || 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1280&h=720&fit=crop'
             };
@@ -238,10 +251,15 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
           return segment;
         });
         
+        console.log('Replay mode - cleaned segments:', cleanedSegments);
         setSegments(cleanedSegments);
         setUserChoiceCount(progress.userChoiceCount || 0);
         setCurrentEnvironment(progress.currentEnvironment || '');
         storyHistory.current = progress.storyHistory;
+        setIsLoading(false);
+        return;
+      } else {
+        console.log('Replay mode - no completed progress found');
         setIsLoading(false);
         return;
       }
@@ -281,6 +299,13 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
   // Auto-save progress whenever segments or choices change (skip in replay mode)
   useEffect(() => {
     if (segments.length > 0 && !isLoading && !isReplayMode) {
+      // Check storage quota before saving
+      if (isStorageNearQuota()) {
+        setShowStorageWarning(true);
+        // Force cleanup to free up space
+        forceCleanupStorage();
+      }
+      
       saveStoryProgress(story.id, {
         segments,
         currentChoices: choices,
@@ -341,6 +366,10 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
         isLoadingImage: true,
       };
 
+      // Clear any previous GIF errors and fallback notifications for new segments
+      setGifError(null);
+      setFallbackNotification(null);
+
       // Check for completion - remove arbitrary choice count requirement and add loop detection
       if (response.isComplete || detectRepetitiveContent(response.narrative)) {
         setShowCompletionModal(true);
@@ -382,13 +411,149 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
       setChoices(response.choices);
       setIsLoading(false);
 
-      // Generate static image in background with character and environment consistency
+      // Generate GIF or static image based on importance and quota
       (async () => {
           try {
-              console.log('Starting background image generation...');
-              const imageUrl = await generateSceneImageWithCharacters(response.imagePrompt, characterDescriptions, currentEnvironment);
-              console.log('Image generated successfully');
+              const falSettings = loadFalSettings();
+              const shouldGenerateGif = response.isImportantScene && 
+                                      falSettings.enabled && 
+                                      falSettings.currentSessionCount < falSettings.sessionLimit &&
+                                      falService.isConfigured() &&
+                                      gifGeneratedCount < 2; // Limit to max 2 GIFs per story
               
+              // Add comprehensive debug logging
+              console.log('Scene importance check:', {
+                  isImportantScene: response.isImportantScene,
+                  falEnabled: falSettings.enabled,
+                  quotaRemaining: falSettings.sessionLimit - falSettings.currentSessionCount,
+                  falConfigured: falService.isConfigured(),
+                  gifGeneratedCount: gifGeneratedCount,
+                  shouldGenerateGif: shouldGenerateGif
+              });
+              
+              if (shouldGenerateGif) {
+                  console.log('Generating GIF for important scene...');
+                  setGifError(null); // Clear any previous errors
+                  
+                  setSegments(prev => {
+                      const newSegments = [...prev];
+                      const lastNarratorIndex = newSegments.findLastIndex(s => s.type === 'narrator');
+                      if (lastNarratorIndex !== -1) {
+                          newSegments[lastNarratorIndex] = { 
+                              ...newSegments[lastNarratorIndex], 
+                              isLoadingGif: true 
+                          };
+                      }
+                      return newSegments;
+                  });
+                  
+                  try {
+                      const gifUrl = await falService.generateGIF(response.imagePrompt, 6); // 5-7 seconds
+                      
+                      // Increment session count
+                      falSettings.currentSessionCount += 1;
+                      saveFalSettings(falSettings);
+                      
+                      // Increment GIF counter for this story
+                      setGifGeneratedCount(prev => prev + 1);
+                      
+                      setSegments(prev => {
+                          const newSegments = [...prev];
+                          const lastNarratorIndex = newSegments.findLastIndex(s => s.type === 'narrator');
+                          if (lastNarratorIndex !== -1) {
+                              newSegments[lastNarratorIndex] = {
+                                  ...newSegments[lastNarratorIndex],
+                                  gifUrl,
+                                  isLoadingGif: false,
+                                  isLoadingImage: false
+                              };
+                          }
+                          return newSegments;
+                      });
+                      return; // Skip static image generation
+                  } catch (error) {
+                      console.error('GIF generation failed, falling back to static image:', error);
+                      
+                      // Determine user-friendly error message for 2-step process
+                      let errorMessage = 'Animation generation failed (image→video pipeline). Using static image instead.';
+                      if (error instanceof Error) {
+                          if (error.message.includes('quota') || error.message.includes('credit')) {
+                              errorMessage = 'Animation generation failed: Insufficient credits. Check your fal.ai account.';
+                          } else if (error.message.includes('API key') || error.message.includes('authentication')) {
+                              errorMessage = 'Animation generation failed: API key issue. Check Settings.';
+                          } else if (error.message.includes('timeout')) {
+                              errorMessage = 'Animation generation timed out. Using static image instead.';
+                          } else if (error.message.includes('configuration')) {
+                              errorMessage = 'Animation generation failed: Configuration issue. Check Settings.';
+                          } else if (error.message.includes('base image')) {
+                              errorMessage = 'Animation generation failed: Could not generate base image. Using static image instead.';
+                          } else if (error.message.includes('image-to-video')) {
+                              errorMessage = 'Animation generation failed: Could not convert image to video. Using static image instead.';
+                          }
+                      }
+                      
+                      setGifError(errorMessage);
+                      
+                      // Update segment to show error state
+                      setSegments(prev => {
+                          const newSegments = [...prev];
+                          const lastNarratorIndex = newSegments.findLastIndex(s => s.type === 'narrator');
+                          if (lastNarratorIndex !== -1) {
+                              newSegments[lastNarratorIndex] = {
+                                  ...newSegments[lastNarratorIndex],
+                                  isLoadingGif: false,
+                                  // Keep isLoadingImage: true so static image generation continues
+                              };
+                          }
+                          return newSegments;
+                      });
+                      
+                      // Fall through to static image generation
+                  }
+              }
+              
+              // Generate static image with fallback logic
+              console.log('Starting background image generation...');
+              let imageUrl: string;
+              let imageSource = 'gemini'; // Track which service generated the image
+              
+              try {
+                  // Try Gemini first
+                  imageUrl = await generateSceneImageWithCharacters(response.imagePrompt, characterDescriptions, currentEnvironment);
+                  console.log('Image generated successfully with Gemini');
+              } catch (geminiError) {
+                  console.error("Gemini image generation failed:", geminiError);
+                  
+                  // Check if fal fallback is enabled
+                  const falSettings = loadFalSettings();
+                  if (falSettings.useFalFallback && falService.isConfigured()) {
+                      console.log('Trying fal.ai as fallback for static image...');
+                      try {
+                          imageUrl = await falService.generateFallbackImage(response.imagePrompt);
+                          imageSource = 'fal';
+                          console.log('Image generated successfully with fal.ai fallback');
+                          setFallbackNotification('Image generated using fal.ai fallback (Gemini failed)');
+                      } catch (falError) {
+                          console.error("fal.ai fallback also failed:", falError);
+                          // Both services failed, use placeholder
+                          imageUrl = 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1280&h=720&fit=crop';
+                          imageSource = 'placeholder';
+                          setFallbackNotification('Both Gemini and fal.ai failed - using placeholder image');
+                      }
+                  } else {
+                      // fal fallback disabled or not configured, use placeholder
+                      console.log('fal.ai fallback disabled or not configured, using placeholder');
+                      imageUrl = 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1280&h=720&fit=crop';
+                      imageSource = 'placeholder';
+                      if (!falService.isConfigured()) {
+                          setFallbackNotification('Gemini failed - fal.ai not configured (using placeholder)');
+                      } else {
+                          setFallbackNotification('Gemini failed - fal.ai fallback disabled in Settings (using placeholder)');
+                      }
+                  }
+              }
+              
+              // Update segment with generated image
               setSegments(prev => {
                   const newSegments = [...prev];
                   for (let i = newSegments.length - 1; i >= 0; i--) {
@@ -403,8 +568,11 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
                   }
                   return newSegments;
               });
+              
+              // Log image source for debugging
+              console.log(`Image displayed from: ${imageSource}`);
           } catch (error) {
-              console.error("Failed to generate scene image:", error);
+              console.error("Unexpected error in image generation:", error);
               console.error("Error details:", error instanceof Error ? error.message : String(error));
               
               // Set fallback image
@@ -771,10 +939,51 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
             {segment.type === 'narrator' && (
               <div className="w-full bg-white rounded-2xl shadow-lg border border-stone-200/50 overflow-hidden">
                 <div className="w-full aspect-video bg-stone-200 flex items-center justify-center">
-                  {segment.isLoadingImage ? (
-                    <LoadingSpinner />
+                  {segment.isLoadingGif ? (
+                    <div className="text-center">
+                      <LoadingSpinner />
+                      <p className="text-sm text-stone-600 mt-2">Creating animated scene...</p>
+                      {gifError && (
+                        <div className="mt-2 p-2 bg-yellow-100 border border-yellow-300 rounded text-xs text-yellow-800">
+                          {gifError}
+                        </div>
+                      )}
+                      {fallbackNotification && (
+                        <div className="mt-2 p-2 bg-blue-100 border border-blue-300 rounded text-xs text-blue-800">
+                          {fallbackNotification}
+                        </div>
+                      )}
+                    </div>
+                  ) : segment.isLoadingImage ? (
+                    <div className="text-center">
+                      <LoadingSpinner />
+                      {gifError && (
+                        <div className="mt-2 p-2 bg-yellow-100 border border-yellow-300 rounded text-xs text-yellow-800">
+                          {gifError}
+                        </div>
+                      )}
+                      {fallbackNotification && (
+                        <div className="mt-2 p-2 bg-blue-100 border border-blue-300 rounded text-xs text-blue-800">
+                          {fallbackNotification}
+                        </div>
+                      )}
+                    </div>
+                  ) : segment.gifUrl ? (
+                    <img src={segment.gifUrl} alt="Animated Scene" className="w-full h-full object-cover" />
                   ) : segment.imageUrl ? (
-                    <img src={segment.imageUrl} alt="Scene" className="w-full h-full object-cover" />
+                    <div className="relative w-full h-full">
+                      <img src={segment.imageUrl} alt="Scene" className="w-full h-full object-cover" />
+                      {gifError && (
+                        <div className="absolute bottom-2 left-2 right-2 p-2 bg-yellow-100/90 border border-yellow-300 rounded text-xs text-yellow-800">
+                          {gifError}
+                        </div>
+                      )}
+                      {fallbackNotification && (
+                        <div className="absolute bottom-2 left-2 right-2 p-2 bg-blue-100/90 border border-blue-300 rounded text-xs text-blue-800">
+                          {fallbackNotification}
+                        </div>
+                      )}
+                    </div>
                   ) : (
                     <div className="text-stone-400">No media available</div>
                   )}
@@ -844,7 +1053,18 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
               </div>
             )}
             {segment.type === 'lesson' && (() => {
-              const lessons = JSON.parse(segment.text);
+              let lessons;
+              try {
+                lessons = JSON.parse(segment.text);
+                if (!Array.isArray(lessons)) {
+                  // If not an array, treat as single lesson
+                  lessons = [segment.text];
+                }
+              } catch (error) {
+                console.error('Error parsing lesson JSON:', error);
+                // Fallback: treat the text as a single lesson
+                lessons = [segment.text];
+              }
               const segmentId = `${segments.indexOf(segment)}`;
               
               return (
@@ -896,7 +1116,7 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
                                         <span>Generating title...</span>
                                       </span>
                                     ) : (
-                                      title || `Lesson ${index + 1}`
+                                      title || (lesson.length > 50 ? lesson.substring(0, 50) + '...' : lesson) || `Lesson ${index + 1}`
                                     )}
                                   </h4>
                                   {/* Click to expand text */}
@@ -1051,6 +1271,42 @@ const StoryPlayer: React.FC<StoryPlayerProps> = ({ userProfile, story, shouldCon
           storyTitle={story.title}
           bibleReference={story.bibleReference}
         />
+      )}
+
+      {/* Storage Warning Modal */}
+      {showStorageWarning && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 text-center">
+            <div className="mb-4">
+              <div className="w-16 h-16 bg-yellow-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+              </div>
+              <h3 className="text-2xl font-bold text-stone-800 mb-2">Storage Almost Full</h3>
+              <p className="text-stone-600 mb-6">
+                Your story progress is taking up a lot of space. We've cleaned up old data to make room, but you may want to complete or delete some stories to free up more space.
+              </p>
+            </div>
+            <div className="space-y-3">
+              <button
+                onClick={() => setShowStorageWarning(false)}
+                className="w-full bg-amber-500 hover:bg-amber-600 text-white font-semibold py-3 px-4 rounded-lg transition-colors"
+              >
+                Continue Story
+              </button>
+              <button
+                onClick={() => {
+                  setShowStorageWarning(false);
+                  onExit(); // Return to story select to manage stories
+                }}
+                className="w-full bg-stone-300 hover:bg-stone-400 text-stone-800 font-semibold py-3 px-4 rounded-lg transition-colors"
+              >
+                Manage Stories
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

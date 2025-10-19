@@ -44,7 +44,7 @@ const storyResponseSchema = {
         },
         isImportantScene: {
             type: Type.BOOLEAN,
-            description: "True if this is a major plot point deserving of animated visualization (e.g., parting of Red Sea, David vs Goliath confrontation, Jesus's resurrection). Reserve for truly pivotal moments, approximately 20-30% of segments."
+            description: "TRUE ONLY for the single most climactic, story-defining moment of the entire biblical narrative. Examples: Moses parting the Red Sea, David slaying Goliath, Jesus rising from the dead. This should be extremely rare - only the ONE moment that defines the entire story. Set to true for maximum 1-2 segments per complete story, or false for all other segments."
         },
     },
     required: ["narrative", "imagePrompt", "choices"],
